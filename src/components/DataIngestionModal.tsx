@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { parseSECDIAData } from '../utils/parser';
 import { ProteinProfile, DatasetMeta } from '../types/sec';
-import { UploadCloud, X, FileText, CheckCircle2, AlertCircle, Sparkles } from 'lucide-react';
+import { anonymizeProfiles, exportAnonymizationKeyCSV } from '../utils/anonymizer';
+import { downloadFile } from '../utils/export';
+import { UploadCloud, X, FileText, CheckCircle2, AlertCircle, Sparkles, ShieldCheck, Download } from 'lucide-react';
 
 interface DataIngestionModalProps {
   isOpen: boolean;
@@ -16,8 +18,8 @@ export const DataIngestionModal: React.FC<DataIngestionModalProps> = ({
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [successSummary, setSuccessSummary] = useState<string | null>(null);
+  const [autoAnonymize, setAutoAnonymize] = useState(true);
+  const [downloadableKey, setDownloadableKey] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
@@ -26,9 +28,10 @@ export const DataIngestionModal: React.FC<DataIngestionModalProps> = ({
     setLoading(true);
     setErrorMsg(null);
     setSuccessSummary(null);
+    setDownloadableKey(null);
 
     try {
-      const allNewProfiles: ProteinProfile[] = [];
+      let allNewProfiles: ProteinProfile[] = [];
       const allNewMeta: DatasetMeta[] = [];
 
       for (let i = 0; i < files.length; i++) {
@@ -38,13 +41,24 @@ export const DataIngestionModal: React.FC<DataIngestionModalProps> = ({
         allNewMeta.push(...res.metadata);
       }
 
+      if (autoAnonymize) {
+        const anonRes = anonymizeProfiles(allNewProfiles);
+        allNewProfiles = anonRes.anonymizedProfiles;
+        const keyCsv = exportAnonymizationKeyCSV(anonRes.keyEntries);
+        setDownloadableKey(keyCsv);
+        setSuccessSummary(
+          `Imported ${allNewProfiles.length.toLocaleString()} profiles. GDPR Anonymization applied!`
+        );
+      } else {
+        setSuccessSummary(
+          `Successfully imported ${allNewProfiles.length.toLocaleString()} profiles across ${allNewMeta.length} run(s)!`
+        );
+      }
+
       onDataLoaded(allNewProfiles, allNewMeta);
-      setSuccessSummary(
-        `Successfully imported ${allNewProfiles.length.toLocaleString()} profiles across ${allNewMeta.length} condition/replicate run(s)!`
-      );
-      setTimeout(() => {
-        onClose();
-      }, 1200);
+      if (!autoAnonymize) {
+        setTimeout(() => onClose(), 1200);
+      }
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to parse CSV file(s). Please verify formatting.');
     } finally {
@@ -72,6 +86,31 @@ export const DataIngestionModal: React.FC<DataIngestionModalProps> = ({
               Supports single CSVs, multi-file batch upload, or unified combined matrices.
             </p>
           </div>
+        </div>
+
+        {/* GDPR Auto-Anonymization Toggle */}
+        <div className="mb-4 p-3 rounded-2xl bg-slate-950/80 border border-slate-800 flex items-center justify-between">
+          <div className="flex items-center space-x-2.5">
+            <ShieldCheck className="w-5 h-5 text-emerald-400" />
+            <div>
+              <div className="text-xs font-bold text-white flex items-center space-x-1.5">
+                <span>GDPR Anonymization Shield</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 font-semibold">Recommended</span>
+              </div>
+              <p className="text-[11px] text-slate-400">
+                Pseudonymizes gene & protein names (PRT_0001, UP_0001) and generates a private local de-anonymization key.
+              </p>
+            </div>
+          </div>
+          <label className="relative inline-flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              checked={autoAnonymize}
+              onChange={(e) => setAutoAnonymize(e.target.checked)}
+              className="sr-only peer"
+            />
+            <div className="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
+          </label>
         </div>
 
         {/* Drop Zone */}
@@ -118,9 +157,26 @@ export const DataIngestionModal: React.FC<DataIngestionModalProps> = ({
         )}
 
         {successSummary && (
-          <div className="mt-4 p-3 bg-emerald-950/40 border border-emerald-500/30 rounded-xl text-xs text-emerald-300 flex items-center space-x-2">
-            <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
-            <span>{successSummary}</span>
+          <div className="mt-4 p-3.5 bg-emerald-950/40 border border-emerald-500/30 rounded-xl text-xs text-emerald-300 space-y-2">
+            <div className="flex items-center space-x-2">
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+              <span className="font-semibold">{successSummary}</span>
+            </div>
+            {downloadableKey && (
+              <div className="pt-2 border-t border-emerald-500/20 flex items-center justify-between">
+                <span className="text-[11px] text-emerald-400">Save your private de-anonymization mapping key locally:</span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    downloadFile(downloadableKey, 'private_deanonymization_key.csv');
+                  }}
+                  className="flex items-center space-x-1 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-[11px] font-bold shadow transition"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download Key (.csv)</span>
+                </button>
+              </div>
+            )}
           </div>
         )}
 

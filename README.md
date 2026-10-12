@@ -45,3 +45,11 @@ To launch the application locally in your browser:
 - **Multi-Replicate & Plate Intelligence**: Automatically parses metadata columns (`Condition`, `Replicate`, `Plate`) as well as wide prefixed columns (e.g. `60min_Fraction_1` or `Rep1_F01`).
 - **Flexible Normalization**: Toggle between **Raw Intensity**, **Peak-Normalized (0 – 1)**, and **Area Percentage (%)**.
 - **Publication Exports**: Download high-resolution vector SVGs of any chromatogram, interaction network, or filtered candidate table.
+
+### 5. GDPR De-Identification & Anonymization Engine
+- **In-App Anonymization Shield**: Automatically pseudonymizes gene symbols (`PRT_0001`), UniProt accessions (`UP_0001`), and functional annotations (`DESC_0001`) on import or export while preserving all fraction intensities, peak profiles, and PCprophet correlation networks.
+- **Confidential Mapping Keys**: The private mapping key (`anonymization_key.csv`) is strictly maintained on your local system and excluded from Git tracking via `.gitignore`.
+- **Local De-Anonymization Utility**: Restore original identifiers at any time offline:
+  ```bash
+  python deanonymize.py report_pg_matrix_combined_app.csv restored_matrix.csv
+  ```

@@ -24,7 +24,7 @@ export const App: React.FC = () => {
   // User selections
   const [activeTab, setActiveTab] = useState<'explorer' | 'complexes' | 'interactors' | 'combined'>('explorer');
   const [normMode, setNormMode] = useState<NormalizationMode>('raw');
-  const [selectedGene, setSelectedGene] = useState<string>('dnaN');
+  const [selectedGene, setSelectedGene] = useState<string>('PRT_0001');
   const [selectedFraction, setSelectedFraction] = useState<number | null>(null);
   const [selectedComplexId, setSelectedComplexId] = useState<string | null>(null);
 

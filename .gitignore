@@ -22,3 +22,12 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Confidential / GDPR Anonymization Keys (Must never be committed)
+anonymization_key.csv
+*anonymization*key*.csv
+de_anonymization*.csv
+
+# Python cache
+__pycache__/
+*.pyc

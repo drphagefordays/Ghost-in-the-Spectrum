@@ -40,6 +40,10 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-teal-500/10 text-teal-400 border border-teal-500/20">
                   PCprophet & PhageMap
                 </span>
+                <span className="text-[11px] px-2 py-0.5 rounded-full font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center space-x-1" title="Dataset is pseudonymized according to GDPR compliance standards">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                  <span>GDPR Anonymized</span>
+                </span>
               </div>
               <div className="text-xs text-slate-400 flex items-center space-x-2">
                 <span>{totalProteins.toLocaleString()} Proteins</span>
