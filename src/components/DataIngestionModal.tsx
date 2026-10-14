@@ -20,6 +20,9 @@ export const DataIngestionModal: React.FC<DataIngestionModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [autoAnonymize, setAutoAnonymize] = useState(true);
   const [downloadableKey, setDownloadableKey] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [successSummary, setSuccessSummary] = useState<string | null>(null);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
 
@@ -113,6 +116,19 @@ export const DataIngestionModal: React.FC<DataIngestionModalProps> = ({
           </label>
         </div>
 
+        {/* Hidden File Input */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept=".csv,.tsv,.txt"
+          className="hidden"
+          onChange={(e) => {
+            handleFiles(e.target.files);
+            e.target.value = '';
+          }}
+        />
+
         {/* Drop Zone */}
         <div
           onDragOver={(e) => {
@@ -130,22 +146,25 @@ export const DataIngestionModal: React.FC<DataIngestionModalProps> = ({
               ? 'border-teal-400 bg-teal-950/20'
               : 'border-slate-700 hover:border-slate-600 bg-slate-950/50'
           }`}
-          onClick={() => {
-            const input = document.createElement('input');
-            input.type = 'file';
-            input.multiple = true;
-            input.accept = '.csv,.tsv,.txt';
-            input.onchange = (e: any) => handleFiles(e.target.files);
-            input.click();
-          }}
+          onClick={() => fileInputRef.current?.click()}
         >
           <UploadCloud className="w-10 h-10 text-teal-400 mx-auto mb-3" />
           <p className="text-sm font-semibold text-slate-200">
             {loading ? 'Processing & parsing matrix...' : 'Drop CSV files here or click to browse'}
           </p>
-          <p className="text-xs text-slate-400 mt-1">
+          <p className="text-xs text-slate-400 mt-1 mb-3">
             Accepts multiple individual files (e.g. 60min + 120min) or combined datasets.
           </p>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              fileInputRef.current?.click();
+            }}
+            className="inline-flex items-center space-x-1.5 px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-teal-400 hover:text-teal-300 rounded-lg text-xs font-semibold border border-slate-700 shadow-sm transition"
+          >
+            <span>Browse CSV Files</span>
+          </button>
         </div>
 
         {/* Feedback messages */}
