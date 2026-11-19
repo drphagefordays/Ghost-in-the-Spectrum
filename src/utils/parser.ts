@@ -11,6 +11,62 @@ export interface ParsedFractionCol {
   plate?: string;
 }
 
+export type AggregationMode = 'sum' | 'mean' | 'none';
+
+export interface ColumnMapping {
+  /** Primary protein / gene identifier column (displayed as the main label) */
+  proteinNameCol: string;
+  /** Optional fallback identifier column when proteinNameCol is blank on a row */
+  fallbackNameCol?: string;
+  /** Optional accession / UniProt ID column */
+  accessionCol?: string;
+  /** Optional protein description / annotation / complex column */
+  descriptionCol?: string;
+  /** Optional monomer molecular weight (kDa) column */
+  mwCol?: string;
+  /** Optional condition / timepoint column (for stacked matrices) */
+  conditionCol?: string;
+  /** Optional replicate column (for stacked matrices) */
+  replicateCol?: string;
+  /** Optional plate column (for stacked matrices) */
+  plateCol?: string;
+  /** How to combine multiple rows sharing the same protein name within one run */
+  aggregationMode?: AggregationMode;
+  /** Optional override for single-condition run name */
+  conditionOverride?: string;
+  /** Optional manual list of fraction columns (overrides auto-detected fractions when provided) */
+  manualFractionCols?: string[];
+}
+
+export interface ColumnStats {
+  name: string;
+  nonEmptyCount: number;
+  totalSampled: number;
+  fillRate: number;
+  numericRate: number;
+  uniqueCount: number;
+  sampleValues: string[];
+  isFractionCol: boolean;
+  isPrecursorCol: boolean;
+}
+
+export interface FileInspectionResult {
+  fileName: string;
+  columns: string[];
+  columnStats: ColumnStats[];
+  metadataColumns: string[];
+  fractionColumns: ParsedFractionCol[];
+  candidateNumericCols: string[];
+  detectedConditions: string[];
+  isPrecursorMatrix: boolean;
+  isLongFormatReport: boolean;
+  totalRows: number;
+  sampleRows: Record<string, string>[];
+  suggestedMapping: ColumnMapping;
+  inferredCondition: string;
+  rawRows: Record<string, string>[];
+}
+
 interface RawParsedFractionCol {
   colName: string;
   fracNum: number;
@@ -22,12 +78,18 @@ interface RawParsedFractionCol {
 
 const MS_EXTENSION_REGEX = /\.(?:d|raw|mzml|mzxml|wiff2?|dia|htrms|tdf|baf|yep|lcd)(?:\.gz)?$/i;
 
+const PRECURSOR_COL_REGEX =
+  /^(?:precursor\.id|precursor\.charge|stripped\.sequence|modified\.sequence|eg\.precursorid|eg\.modifiedsequence|peptide\.sequence)$/i;
+
+const NON_ID_METADATA_REGEX =
+  /^(?:unnamed:\s*\d+|index|row|row_id|#|proteotypic|stripped\.sequence|modified\.sequence|precursor\.charge|precursor\.id|eg\.\w+|charge|n\.sequences|n\.proteotypic\.sequences|n\.genes|gene_count|num_genes|protein\s+length|length|monomermw_kda|mw|mw_kda|molecular_weight|mol\.\s*weight.*|fdr|q\.value|global\.q\.value|lib\.q\.value|pg\.q\.value|pep|score|f1[_\s-]?score|rt|im|ccs|mz|condition|timepoint|treatment|sample_id|sample|replicate|rep|biorep|techrep|plate|plate_id|batch|group|reverse|potential\s+contaminant|only\s+identified\s+by\s+site|ms\/ms\s+count|peptides|unique\s+peptides|razor.*|sequence\s+coverage.*)$/i;
+
 function stripBomAndTrim(value: string): string {
   return value.replace(/^\uFEFF/, '').trim();
 }
 
 function isKnownMetadataColumn(cleanHeader: string): boolean {
-  return /^(?:gene|genes|gene_name|gene[._\s]names?|pg\.genes|protein\.group|protein\.ids?|protein\.names?|pg\.protein\w*|protein|protein_id|protein\s+id|majority\s+protein\s+ids|entry\s+name|fasta\s+headers|first\.protein\.description|protein\.description|protein\s+description|description|complex|name|organism|uniprot|uniprot_id|accession|proteotypic|stripped\.sequence|modified\.sequence|precursor\.charge|precursor\.id|eg\.\w+|peptide|peptides|unique\s+peptides|razor.*|sequence|sequence\s+coverage.*|charge|n\.sequences|n\.proteotypic\.sequences|protein\s+length|length|monomermw_kda|mw|mw_kda|molecular_weight|mol\.\s*weight.*|fdr|q\.value|global\.q\.value|lib\.q\.value|pg\.q\.value|pep|score|f1[_\s-]?score|rt|im|ccs|mz|condition|timepoint|treatment|sample_id|sample|replicate|rep|biorep|techrep|plate|plate_id|batch|group|reverse|potential\s+contaminant|only\s+identified\s+by\s+site|indistinguishable\s+proteins|ms\/ms\s+count|id)$/i.test(
+  return /^(?:unnamed:\s*\d+|index|row|row_id|#|gene|genes|gene_name|gene[._\s]names?|gene[._\s]?symbol|symbol|hgnc|pg\.genes|protein\.group|protein\.ids?|protein\.names?|protein[._\s]?name|pg\.protein\w*|protein|protein_id|protein\s+id|majority\s+protein\s+ids|entry|entry[._\s]?name|locus|locus[._\s]?tag|orf|fasta\s+headers|first\.protein\.description|protein\.description|protein\s+description|description|product|function|annotation|complex|name|target|identifier|organism|uniprot|uniprot_id|uniprotkb|accession|proteotypic|stripped\.sequence|modified\.sequence|precursor\.charge|precursor\.id|eg\.\w+|peptide|peptides|unique\s+peptides|razor.*|sequence|sequence\s+coverage.*|charge|n\.sequences|n\.proteotypic\.sequences|n\.genes|gene_count|num_genes|protein\s+length|length|monomermw_kda|mw|mw_kda|molecular_weight|mol\.\s*weight.*|fdr|q\.value|global\.q\.value|lib\.q\.value|pg\.q\.value|pep|score|f1[_\s-]?score|rt|im|ccs|mz|condition|timepoint|treatment|sample_id|sample|replicate|rep|biorep|techrep|plate|plate_id|batch|group|reverse|potential\s+contaminant|only\s+identified\s+by\s+site|indistinguishable\s+proteins|ms\/ms\s+count|id)$/i.test(
     cleanHeader
   );
 }
@@ -311,6 +373,32 @@ export function detectFractionColumns(columns: string[]): ParsedFractionCol[] {
   return resolved;
 }
 
+/**
+ * Converts a user-selected ordered list of column names into ParsedFractionCol entries
+ * when automatic fraction header detection doesn't match custom column names.
+ */
+export function buildManualFractionColumns(colNames: string[]): ParsedFractionCol[] {
+  const detected = detectFractionColumns(colNames);
+  if (detected.length === colNames.length) {
+    return detected;
+  }
+
+  const parsedNums = colNames.map(col => {
+    const clean = stripBomAndTrim(col);
+    const numMatch = clean.match(/(\d+)\s*$/);
+    return numMatch ? parseInt(numMatch[1], 10) : null;
+  });
+
+  const allHaveUniqueNums =
+    parsedNums.every((n): n is number => n !== null) &&
+    new Set(parsedNums).size === colNames.length;
+
+  return colNames.map((colName, idx) => ({
+    colName,
+    fracNum: allHaveUniqueNums ? (parsedNums[idx] as number) : idx + 1
+  }));
+}
+
 function inferConditionFromFileName(fileName: string): string {
   const condMatch = fileName.match(
     /(?:^|[_\-\s.])(\d+\s*(?:min|hr|hrs|h)|ctrl|control|mock|wt|treat\d*|plate\d*|rep\d*)(?=$|[_\-\s.])/i
@@ -324,6 +412,10 @@ function inferConditionFromFileName(fileName: string): string {
       .replace(/[._-]report$/i, '')
       .trim() || fileName.replace(/\.[^/.]+$/, '')
   );
+}
+
+function isPureNumericValue(val: string): boolean {
+  return /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(val);
 }
 
 function parseNumericIntensity(rawValue: string | undefined): number {
@@ -340,15 +432,195 @@ function csvEscape(value: string): string {
   return value;
 }
 
+function computeColumnStats(
+  columns: string[],
+  rawRows: Record<string, string>[],
+  fractionColSet: Set<string>
+): ColumnStats[] {
+  const sampleLimit = Math.min(rawRows.length, 200);
+  return columns.map(name => {
+    let nonEmptyCount = 0;
+    let numericCount = 0;
+    const uniqueVals = new Set<string>();
+    const sampleValues: string[] = [];
+
+    for (let i = 0; i < sampleLimit; i++) {
+      const v = (rawRows[i]?.[name] || '').trim();
+      if (!v || v === 'NA' || v === 'NaN' || v === 'null') continue;
+      nonEmptyCount++;
+      if (isPureNumericValue(v)) numericCount++;
+      if (!uniqueVals.has(v)) {
+        uniqueVals.add(v);
+        if (sampleValues.length < 3) sampleValues.push(v);
+      }
+    }
+
+    const clean = stripBomAndTrim(name);
+    return {
+      name,
+      nonEmptyCount,
+      totalSampled: sampleLimit,
+      fillRate: sampleLimit > 0 ? nonEmptyCount / sampleLimit : 0,
+      numericRate: nonEmptyCount > 0 ? numericCount / nonEmptyCount : 0,
+      uniqueCount: uniqueVals.size,
+      sampleValues,
+      isFractionCol: fractionColSet.has(name),
+      isPrecursorCol: PRECURSOR_COL_REGEX.test(clean)
+    };
+  });
+}
+
+function scoreProteinNameCandidate(stat: ColumnStats): number {
+  const clean = stripBomAndTrim(stat.name);
+  if (!clean || stat.isFractionCol || stat.fillRate === 0) return -1000;
+  // Reject pure numeric index/count/charge columns
+  if (stat.numericRate > 0.9) return -500;
+  if (stat.isPrecursorCol) return -200;
+  if (NON_ID_METADATA_REGEX.test(clean)) return -400;
+
+  let baseScore = 0;
+  if (/^(?:gene|genes|gene_name|gene[._\s]names?|gene[._\s]?symbol|genesymbol|symbol|pg\.genes|hgnc)$/i.test(clean)) {
+    baseScore = 100;
+  } else if (/^(?:protein[._\s]?names?|pg\.proteinnames?|entry[._\s]?name|protein_id|protein\s+id|protein|locus|locus[._\s]?tag|orf)$/i.test(clean)) {
+    baseScore = 90;
+  } else if (/^(?:protein\.group|pg\.proteingroups|protein\.ids?|majority\s+protein\s+ids|uniprot|uniprot_id|accession|entry)$/i.test(clean)) {
+    baseScore = 82;
+  } else if (/^(?:name|target|identifier|id)$/i.test(clean)) {
+    baseScore = 70;
+  } else if (/^(?:first\.protein\.description|protein[._\s]?description|description|product)$/i.test(clean)) {
+    baseScore = 50;
+  } else if (/gene|protein|symbol|locus|orf/i.test(clean) && !/count|length|mw|weight|score|q\.value|fdr|sequence/i.test(clean)) {
+    baseScore = 65;
+  } else {
+    baseScore = 15;
+  }
+
+  // Strongly penalize mostly-empty columns (e.g. FASTA without GN= tags where Genes is 95% blank)
+  if (stat.fillRate < 0.5) {
+    baseScore -= 55 * (1 - stat.fillRate);
+  } else {
+    baseScore += stat.fillRate * 10;
+  }
+
+  // Slight preference for columns with diverse values (actual protein identifiers rather than a constant column)
+  if (stat.uniqueCount <= 1 && stat.totalSampled > 5) {
+    baseScore -= 40;
+  }
+
+  return baseScore;
+}
+
+function suggestColumnMapping(
+  columns: string[],
+  columnStats: ColumnStats[],
+  isPrecursorMatrix: boolean,
+  inferredCondition: string
+): ColumnMapping {
+  const norm = (c: string) => stripBomAndTrim(c);
+  const statsByName = new Map(columnStats.map(s => [s.name, s]));
+  const nonFractionStats = columnStats.filter(s => !s.isFractionCol);
+
+  // 1. Primary Protein / Gene Name column (content-aware ranking)
+  const rankedNameCols = [...nonFractionStats]
+    .map(stat => ({ stat, score: scoreProteinNameCandidate(stat) }))
+    .sort((a, b) => b.score - a.score);
+
+  const proteinNameCol =
+    rankedNameCols[0]?.stat.name ||
+    nonFractionStats[0]?.name ||
+    columns[0] ||
+    '';
+
+  // 2. Fallback identifier column when proteinNameCol is blank on specific rows
+  const fallbackNameCol =
+    rankedNameCols.find(
+      item =>
+        item.stat.name !== proteinNameCol &&
+        item.score >= 50 &&
+        item.stat.fillRate > 0.5
+    )?.stat.name || '';
+
+  // 3. Accession / UniProt ID column
+  const findColByRegex = (regex: RegExp, exclude: string[] = []): string => {
+    const match = nonFractionStats.find(
+      s => !exclude.includes(s.name) && s.fillRate > 0 && regex.test(norm(s.name))
+    );
+    return match ? match.name : '';
+  };
+
+  let accessionCol =
+    findColByRegex(/^(?:uniprot|uniprot_id|uniprotkb|accession|entry|pg\.proteinaccessions?)$/i, [proteinNameCol]) ||
+    findColByRegex(/^(?:protein\.group|pg\.proteingroups|majority\s+protein\s+ids|protein\.ids?|protein\s+id)$/i, [proteinNameCol]);
+
+  // If no distinct column matched, allow Protein.Group / UniProt even if same header only when it's explicitly UniProt/Accession
+  if (!accessionCol) {
+    accessionCol = findColByRegex(/^(?:uniprot|uniprot_id|accession)$/i);
+  }
+
+  // 4. Description / Annotation column
+  const primarySamples = JSON.stringify(statsByName.get(proteinNameCol)?.sampleValues || []);
+  let descriptionCol =
+    findColByRegex(
+      /^(?:first\.protein\.description|protein\.description|protein\s+description|pg\.proteindescriptions?|description|product|function|annotation|complex|fasta\s+headers)$/i,
+      [proteinNameCol]
+    );
+  if (!descriptionCol) {
+    const altNameCol = findColByRegex(
+      /^(?:protein\.names?|pg\.proteinnames?|entry\s+name|name)$/i,
+      [proteinNameCol, accessionCol]
+    );
+    if (altNameCol) {
+      const altSamples = JSON.stringify(statsByName.get(altNameCol)?.sampleValues || []);
+      if (altSamples !== primarySamples) {
+        descriptionCol = altNameCol;
+      }
+    }
+  }
+
+  // 5. Molecular Weight & stacked metadata columns
+  const mwCol =
+    nonFractionStats.find(s =>
+      /^(?:monomermw_kda|mw|mw_kda|molecular_weight|mol\.\s*weight.*|mass_kda)$/i.test(norm(s.name))
+    )?.name || '';
+
+  const conditionCol =
+    nonFractionStats.find(s =>
+      /^(?:condition|timepoint|treatment|sample_id|sample)$/i.test(norm(s.name))
+    )?.name || '';
+
+  const replicateCol =
+    nonFractionStats.find(s =>
+      /^(?:replicate|rep|biorep|techrep)$/i.test(norm(s.name))
+    )?.name || '';
+
+  const plateCol =
+    nonFractionStats.find(s =>
+      /^(?:plate|plate_id)$/i.test(norm(s.name))
+    )?.name || '';
+
+  return {
+    proteinNameCol,
+    fallbackNameCol: fallbackNameCol || undefined,
+    accessionCol: accessionCol || undefined,
+    descriptionCol: descriptionCol || undefined,
+    mwCol: mwCol || undefined,
+    conditionCol: conditionCol || undefined,
+    replicateCol: replicateCol || undefined,
+    plateCol: plateCol || undefined,
+    aggregationMode: isPrecursorMatrix ? 'sum' : 'none',
+    conditionOverride: inferredCondition
+  };
+}
+
 /**
- * Intelligent parser for single or multi-condition SEC DIA CSV/TSV files,
- * including raw DIA-NN matrices (pg_matrix.tsv, pr_matrix.tsv, gg_matrix.tsv).
+ * Parses and inspects a SEC-DIA CSV/TSV file without committing to a fixed column mapping.
+ * Returns column statistics, sample rows, detected fractions, and smart suggested mappings
+ * so users can review or customize which column is Protein Name, Accession, Description, etc.
  */
-export async function parseSECDIAData(
+export async function inspectSECDIAFile(
   fileOrText: File | string,
-  fileName: string = 'SEC_Data.csv',
-  fallbackCondition?: string
-): Promise<{ profiles: ProteinProfile[]; metadata: DatasetMeta[] }> {
+  fileName: string = 'SEC_Data.csv'
+): Promise<FileInspectionResult> {
   return new Promise((resolve, reject) => {
     Papa.parse<Record<string, string>>(fileOrText as any, {
       header: true,
@@ -364,389 +636,74 @@ export async function parseSECDIAData(
           const columns = Object.keys(rawRows[0] || {});
           const norm = (c: string) => stripBomAndTrim(c);
 
-          // 1. Detect ID & annotation columns (supports app CSV, DIA-NN, Spectronaut, FragPipe, MaxQuant)
-          const geneCol =
-            columns.find(c => /^(gene|genes|gene_name|gene[._\s]names?|pg\.genes|protein_id)$/i.test(norm(c))) ||
-            columns.find(c => /gene/i.test(norm(c))) ||
-            columns.find(c => /^(protein\.group|pg\.proteingroups|protein\.ids?|majority\s+protein\s+ids|protein)$/i.test(norm(c))) ||
-            columns[0];
+          const isPrecursorMatrix = columns.some(c => PRECURSOR_COL_REGEX.test(norm(c)));
+          const fractionColumns = detectFractionColumns(columns);
+          const fractionColSet = new Set(fractionColumns.map(f => f.colName));
+          const columnStats = computeColumnStats(columns, rawRows, fractionColSet);
+          const metadataColumns = columns.filter(c => !fractionColSet.has(c));
 
-          const proteinGroupCol =
-            columns.find(c => /^(protein\.group|pg\.proteingroups|majority\s+protein\s+ids|protein\s+id)$/i.test(norm(c))) || '';
-
-          const uniprotCol =
-            columns.find(c => /^(uniprot|uniprot_id|accession)$/i.test(norm(c))) ||
-            columns.find(c => /^(protein\.group|pg\.proteingroups|protein\.ids?|majority\s+protein\s+ids)$/i.test(norm(c))) || '';
-
-          const descCol =
-            columns.find(c =>
-              /^(first\.protein\.description|protein\.description|protein\s+description|pg\.proteindescriptions?|description|complex)$/i.test(
-                norm(c)
-              )
-            ) ||
-            columns.find(c => /^(protein\.names?|pg\.proteinnames?|entry\s+name|name)$/i.test(norm(c))) || '';
-
-          const mwCol =
-            columns.find(c => /^(monomermw_kda|mw|mw_kda|molecular_weight|mol\.\s*weight\s*\[kda\])$/i.test(norm(c))) || '';
-
-          // Detect precursor-level matrices (e.g. DIA-NN report.pr_matrix.tsv) so precursors roll up cleanly to proteins
-          const isPrecursorMatrix = columns.some(c =>
-            /^(precursor\.id|precursor\.charge|stripped\.sequence|modified\.sequence|eg\.precursorid|eg\.modifiedsequence)$/i.test(
-              norm(c)
+          // Candidate numeric columns for manual fraction selection if auto-detection found none
+          const candidateNumericCols = columnStats
+            .filter(
+              s =>
+                !s.isFractionCol &&
+                !s.isPrecursorCol &&
+                !NON_ID_METADATA_REGEX.test(norm(s.name)) &&
+                s.fillRate > 0 &&
+                s.numericRate >= 0.85
             )
-          );
+            .map(s => s.name);
 
-          // 2. Detect metadata columns in stacked format
-          const conditionCol = columns.find(c => /^(condition|timepoint|treatment|sample_id|sample)$/i.test(norm(c))) || '';
-          const replicateCol = columns.find(c => /^(replicate|rep|biorep|techrep)$/i.test(norm(c))) || '';
-          const plateCol = columns.find(c => /^(plate|plate_id)$/i.test(norm(c))) || '';
-
-          // 3. Detect fraction columns
-          const fractionHeaders = detectFractionColumns(columns);
-
-          if (fractionHeaders.length === 0) {
-            const hasLongFormatRunCol = columns.some(c => /^(run|file\.name|r\.filename)$/i.test(norm(c)));
-            if (hasLongFormatRunCol) {
-              return reject(
-                new Error(
-                  'Detected a long-format DIA-NN report (Run / File.Name column). Please upload a DIA-NN matrix file (*_pg_matrix.tsv, *_pr_matrix.tsv, or *_gg_matrix.tsv) or wide SEC CSV.'
-                )
-              );
-            }
-            return reject(
-              new Error(
-                'No fraction columns detected. Expecting headers like Fraction_1, Frac_1, F1, or DIA-NN raw run paths containing _F01_ / _Frac1_.'
-              )
-            );
-          }
-
-          const resolveRowIdentity = (row: Record<string, string>) => {
-            const gene =
-              (row[geneCol] || '').trim() ||
-              (proteinGroupCol ? (row[proteinGroupCol] || '').trim() : '') ||
-              (uniprotCol ? (row[uniprotCol] || '').trim() : '');
-            const uniprot = uniprotCol ? (row[uniprotCol] || '').trim() : '';
-            const description = descCol ? (row[descCol] || '').trim() : '';
-            const parsedMw = mwCol && row[mwCol] ? parseFloat(row[mwCol]) : NaN;
-            const mw = !isNaN(parsedMw) && isFinite(parsedMw) ? parsedMw : undefined;
-            return { gene, uniprot, description, mw };
-          };
-
-          // Collect distinct embedded conditions from fraction headers
           const conditionPrefixes = new Set<string>();
-          for (const f of fractionHeaders) {
+          for (const f of fractionColumns) {
             if (f.condition) conditionPrefixes.add(f.condition);
           }
 
-          const profiles: ProteinProfile[] = [];
-          const metaMap = new Map<string, DatasetMeta>();
-
           const singleHeaderCondition =
             conditionPrefixes.size === 1 ? Array.from(conditionPrefixes)[0] : undefined;
-          const inferredFileCondition =
-            fallbackCondition || singleHeaderCondition || inferConditionFromFileName(fileName);
+          const inferredCondition = singleHeaderCondition || inferConditionFromFileName(fileName);
 
-          if (conditionPrefixes.size > 1 && !conditionCol) {
-            // CASE A: Wide format with multiple conditions embedded in column headers
-            for (const cond of conditionPrefixes) {
-              const condFracs = fractionHeaders
-                .filter(f => f.condition === cond)
-                .sort((a, b) => a.fracNum - b.fracNum);
+          const isLongFormatReport =
+            fractionColumns.length === 0 &&
+            columns.some(c => /^(?:run|file\.name|r\.filename)$/i.test(norm(c)));
 
-              const fracNumbers = condFracs.map(f => f.fracNum);
-              const fracNames = condFracs.map(f => f.colName);
-              const firstFrac = condFracs[0];
-              const replicate = firstFrac?.replicate;
-              const plate = firstFrac?.plate;
+          const suggestedMapping = suggestColumnMapping(
+            columns,
+            columnStats,
+            isPrecursorMatrix,
+            inferredCondition
+          );
 
-              const dsId = `${fileName}_${cond}`;
-
-              if (isPrecursorMatrix) {
-                const aggMap = new Map<
-                  string,
-                  { gene: string; uniprot: string; description: string; mw?: number; values: number[]; precursors: number }
-                >();
-                let totalPrecursors = 0;
-
-                for (const row of rawRows) {
-                  const { gene, uniprot, description, mw } = resolveRowIdentity(row);
-                  if (!gene) continue;
-
-                  const key = gene.toLowerCase();
-                  let entry = aggMap.get(key);
-                  if (!entry) {
-                    entry = {
-                      gene,
-                      uniprot,
-                      description,
-                      mw,
-                      values: new Array(condFracs.length).fill(0),
-                      precursors: 0
-                    };
-                    aggMap.set(key, entry);
-                  } else {
-                    if (!entry.uniprot && uniprot) entry.uniprot = uniprot;
-                    if (!entry.description && description) entry.description = description;
-                    if (entry.mw === undefined && mw !== undefined) entry.mw = mw;
-                  }
-
-                  entry.precursors += 1;
-                  totalPrecursors += 1;
-
-                  for (let i = 0; i < condFracs.length; i++) {
-                    const val = parseNumericIntensity(row[condFracs[i].colName]);
-                    if (val > 0) entry.values[i] += val;
-                  }
-                }
-
-                metaMap.set(dsId, {
-                  id: dsId,
-                  name: `${fileName} (${cond})`,
-                  condition: cond,
-                  replicate,
-                  plate,
-                  fractionCount: condFracs.length,
-                  fractionNames: fracNames,
-                  proteinCount: aggMap.size,
-                  precursorCount: totalPrecursors,
-                  source: 'upload'
-                });
-
-                let idx = 0;
-                aggMap.forEach(entry => {
-                  const apex = findApex(entry.values, fracNumbers);
-                  profiles.push({
-                    id: `${entry.gene}__${cond}__${idx++}`,
-                    gene: entry.gene,
-                    uniprot: entry.uniprot,
-                    description: entry.description,
-                    mw: entry.mw,
-                    condition: cond,
-                    replicate,
-                    plate,
-                    fractions: fracNumbers,
-                    values: entry.values,
-                    apexFraction: apex.apexFraction,
-                    apexIntensity: apex.apexIntensity,
-                    totalArea: apex.totalArea
-                  });
-                });
-              } else {
-                let proteinCount = 0;
-                for (let idx = 0; idx < rawRows.length; idx++) {
-                  const row = rawRows[idx];
-                  const { gene, uniprot, description, mw } = resolveRowIdentity(row);
-                  if (!gene) continue;
-
-                  proteinCount += 1;
-                  const values = condFracs.map(f => parseNumericIntensity(row[f.colName]));
-                  const apex = findApex(values, fracNumbers);
-
-                  profiles.push({
-                    id: `${gene}__${cond}__${idx}`,
-                    gene,
-                    uniprot,
-                    description,
-                    mw,
-                    condition: cond,
-                    replicate,
-                    plate,
-                    fractions: fracNumbers,
-                    values,
-                    apexFraction: apex.apexFraction,
-                    apexIntensity: apex.apexIntensity,
-                    totalArea: apex.totalArea
-                  });
-                }
-
-                metaMap.set(dsId, {
-                  id: dsId,
-                  name: `${fileName} (${cond})`,
-                  condition: cond,
-                  replicate,
-                  plate,
-                  fractionCount: condFracs.length,
-                  fractionNames: fracNames,
-                  proteinCount,
-                  source: 'upload'
-                });
-              }
-            }
-          } else {
-            // CASE B: Standard single-run or stacked format (Condition column or uniform fraction columns)
-            const sortedFracs = fractionHeaders
-              .filter(f => !f.condition || conditionPrefixes.size <= 1)
-              .sort((a, b) => a.fracNum - b.fracNum);
-
-            const fracNumbers = sortedFracs.map(f => f.fracNum);
-            const fracNames = sortedFracs.map(f => f.colName);
-            const headerReplicate = sortedFracs[0]?.replicate;
-            const headerPlate = sortedFracs[0]?.plate;
-
-            if (isPrecursorMatrix) {
-              const datasetAgg = new Map<
-                string,
-                {
-                  condition: string;
-                  replicate?: string;
-                  plate?: string;
-                  precursorCount: number;
-                  proteins: Map<
-                    string,
-                    { gene: string; uniprot: string; description: string; mw?: number; values: number[] }
-                  >;
-                }
-              >();
-
-              for (let idx = 0; idx < rawRows.length; idx++) {
-                const row = rawRows[idx];
-                const { gene, uniprot, description, mw } = resolveRowIdentity(row);
-                if (!gene) continue;
-
-                const condition =
-                  conditionCol && row[conditionCol]
-                    ? row[conditionCol].trim()
-                    : inferredFileCondition || 'Default';
-                const replicate =
-                  replicateCol && row[replicateCol] ? row[replicateCol].trim() : headerReplicate;
-                const plate = plateCol && row[plateCol] ? row[plateCol].trim() : headerPlate;
-
-                const dsKey = `${condition}_${replicate || 'rep1'}_${plate || 'plate1'}`;
-                let ds = datasetAgg.get(dsKey);
-                if (!ds) {
-                  ds = {
-                    condition,
-                    replicate,
-                    plate,
-                    precursorCount: 0,
-                    proteins: new Map()
-                  };
-                  datasetAgg.set(dsKey, ds);
-                }
-
-                ds.precursorCount += 1;
-                const pKey = gene.toLowerCase();
-                let entry = ds.proteins.get(pKey);
-                if (!entry) {
-                  entry = {
-                    gene,
-                    uniprot,
-                    description,
-                    mw,
-                    values: new Array(sortedFracs.length).fill(0)
-                  };
-                  ds.proteins.set(pKey, entry);
-                } else {
-                  if (!entry.uniprot && uniprot) entry.uniprot = uniprot;
-                  if (!entry.description && description) entry.description = description;
-                  if (entry.mw === undefined && mw !== undefined) entry.mw = mw;
-                }
-
-                for (let i = 0; i < sortedFracs.length; i++) {
-                  const val = parseNumericIntensity(row[sortedFracs[i].colName]);
-                  if (val > 0) entry.values[i] += val;
-                }
-              }
-
-              datasetAgg.forEach((ds, dsKey) => {
-                metaMap.set(dsKey, {
-                  id: dsKey,
-                  name: `${ds.condition}${ds.replicate ? ` (${ds.replicate})` : ''}`,
-                  condition: ds.condition,
-                  replicate: ds.replicate,
-                  plate: ds.plate,
-                  fractionCount: sortedFracs.length,
-                  fractionNames: fracNames,
-                  proteinCount: ds.proteins.size,
-                  precursorCount: ds.precursorCount,
-                  source: 'upload'
-                });
-
-                let idx = 0;
-                ds.proteins.forEach(entry => {
-                  const apex = findApex(entry.values, fracNumbers);
-                  profiles.push({
-                    id: `${entry.gene}__${ds.condition}__${ds.replicate || ''}__${ds.plate || ''}__${idx++}`,
-                    gene: entry.gene,
-                    uniprot: entry.uniprot,
-                    description: entry.description,
-                    mw: entry.mw,
-                    condition: ds.condition,
-                    replicate: ds.replicate,
-                    plate: ds.plate,
-                    fractions: fracNumbers,
-                    values: entry.values,
-                    apexFraction: apex.apexFraction,
-                    apexIntensity: apex.apexIntensity,
-                    totalArea: apex.totalArea
-                  });
-                });
-              });
-            } else {
-              for (let idx = 0; idx < rawRows.length; idx++) {
-                const row = rawRows[idx];
-                const { gene, uniprot, description, mw } = resolveRowIdentity(row);
-                if (!gene) continue;
-
-                const condition =
-                  conditionCol && row[conditionCol]
-                    ? row[conditionCol].trim()
-                    : inferredFileCondition || 'Default';
-
-                const replicate =
-                  replicateCol && row[replicateCol] ? row[replicateCol].trim() : headerReplicate;
-                const plate = plateCol && row[plateCol] ? row[plateCol].trim() : headerPlate;
-
-                const values = sortedFracs.map(f => parseNumericIntensity(row[f.colName]));
-                const apex = findApex(values, fracNumbers);
-
-                const dsKey = `${condition}_${replicate || 'rep1'}_${plate || 'plate1'}`;
-                if (!metaMap.has(dsKey)) {
-                  metaMap.set(dsKey, {
-                    id: dsKey,
-                    name: `${condition}${replicate ? ` (${replicate})` : ''}`,
-                    condition,
-                    replicate,
-                    plate,
-                    fractionCount: sortedFracs.length,
-                    fractionNames: fracNames,
-                    proteinCount: 0,
-                    source: 'upload'
-                  });
-                }
-                const currentMeta = metaMap.get(dsKey)!;
-                currentMeta.proteinCount += 1;
-
-                profiles.push({
-                  id: `${gene}__${condition}__${replicate || ''}__${plate || ''}__${idx}`,
-                  gene,
-                  uniprot,
-                  description,
-                  mw,
-                  condition,
-                  replicate,
-                  plate,
-                  fractions: fracNumbers,
-                  values,
-                  apexFraction: apex.apexFraction,
-                  apexIntensity: apex.apexIntensity,
-                  totalArea: apex.totalArea
-                });
-              }
+          // Collect distinct detected conditions (either wide header prefixes or stacked Condition column)
+          const detectedConditions = new Set<string>();
+          if (conditionPrefixes.size > 1 && !suggestedMapping.conditionCol) {
+            conditionPrefixes.forEach(c => detectedConditions.add(c));
+          } else if (suggestedMapping.conditionCol) {
+            const condColName = suggestedMapping.conditionCol;
+            for (let i = 0; i < rawRows.length; i++) {
+              const v = (rawRows[i]?.[condColName] || '').trim();
+              if (v) detectedConditions.add(v);
             }
           }
-
-          if (profiles.length === 0) {
-            return reject(
-              new Error(
-                'No valid protein rows were found in this file. Please ensure there is a gene or protein identifier column.'
-              )
-            );
+          if (detectedConditions.size === 0) {
+            detectedConditions.add(inferredCondition);
           }
 
           resolve({
-            profiles,
-            metadata: Array.from(metaMap.values())
+            fileName,
+            columns,
+            columnStats,
+            metadataColumns,
+            fractionColumns,
+            candidateNumericCols,
+            detectedConditions: Array.from(detectedConditions),
+            isPrecursorMatrix,
+            isLongFormatReport,
+            totalRows: rawRows.length,
+            sampleRows: rawRows.slice(0, 8),
+            suggestedMapping,
+            inferredCondition,
+            rawRows
           });
         } catch (err) {
           reject(err);
@@ -755,6 +712,448 @@ export async function parseSECDIAData(
       error: (err) => reject(err)
     });
   });
+}
+
+/**
+ * Builds ProteinProfile[] and DatasetMeta[] from an inspected file using either
+ * the auto-suggested column mapping or user-customized overrides.
+ */
+export function buildProfilesFromInspection(
+  inspection: FileInspectionResult,
+  mappingOverride?: Partial<ColumnMapping>,
+  fallbackCondition?: string
+): { profiles: ProteinProfile[]; metadata: DatasetMeta[] } {
+  const { rawRows, fileName } = inspection;
+  const mapping: ColumnMapping = {
+    ...inspection.suggestedMapping,
+    ...mappingOverride
+  };
+
+  const fractionHeaders =
+    mapping.manualFractionCols && mapping.manualFractionCols.length > 0
+      ? buildManualFractionColumns(mapping.manualFractionCols)
+      : inspection.fractionColumns;
+
+  if (fractionHeaders.length === 0) {
+    if (inspection.isLongFormatReport) {
+      throw new Error(
+        'Detected a long-format DIA-NN report (Run / File.Name column). Please upload a DIA-NN matrix file (*_pg_matrix.tsv, *_pr_matrix.tsv, or *_gg_matrix.tsv) or wide SEC CSV.'
+      );
+    }
+    throw new Error(
+      'No fraction columns detected. Expecting headers like Fraction_1, Frac_1, F1, or DIA-NN raw run paths containing _F01_ / _Frac1_ — or select fraction columns manually.'
+    );
+  }
+
+  const proteinNameCol = mapping.proteinNameCol;
+  const fallbackNameCol = mapping.fallbackNameCol || '';
+  const accessionCol = mapping.accessionCol || '';
+  const descriptionCol = mapping.descriptionCol || '';
+  const mwCol = mapping.mwCol || '';
+  const conditionCol = mapping.conditionCol || '';
+  const replicateCol = mapping.replicateCol || '';
+  const plateCol = mapping.plateCol || '';
+  const aggregationMode: AggregationMode =
+    mapping.aggregationMode ?? (inspection.isPrecursorMatrix ? 'sum' : 'none');
+
+  const resolveRowIdentity = (row: Record<string, string>) => {
+    const primary = proteinNameCol ? (row[proteinNameCol] || '').trim() : '';
+    const fallback = fallbackNameCol ? (row[fallbackNameCol] || '').trim() : '';
+    const accession = accessionCol ? (row[accessionCol] || '').trim() : '';
+    const description = descriptionCol ? (row[descriptionCol] || '').trim() : '';
+    const gene = primary || fallback || accession;
+    const parsedMw = mwCol && row[mwCol] ? parseFloat(row[mwCol]) : NaN;
+    const mw = !isNaN(parsedMw) && isFinite(parsedMw) ? parsedMw : undefined;
+    return { gene, uniprot: accession, description, mw };
+  };
+
+  const conditionPrefixes = new Set<string>();
+  for (const f of fractionHeaders) {
+    if (f.condition) conditionPrefixes.add(f.condition);
+  }
+
+  const profiles: ProteinProfile[] = [];
+  const metaMap = new Map<string, DatasetMeta>();
+
+  const singleConditionLabel =
+    fallbackCondition ||
+    (mapping.conditionOverride && mapping.conditionOverride.trim()) ||
+    inspection.inferredCondition ||
+    'Default';
+
+  const shouldAggregate = aggregationMode === 'sum' || aggregationMode === 'mean';
+
+  if (conditionPrefixes.size > 1 && !conditionCol) {
+    // CASE A: Wide format with multiple conditions embedded in column headers
+    for (const cond of conditionPrefixes) {
+      const condFracs = fractionHeaders
+        .filter(f => f.condition === cond)
+        .sort((a, b) => a.fracNum - b.fracNum);
+
+      const fracNumbers = condFracs.map(f => f.fracNum);
+      const fracNames = condFracs.map(f => f.colName);
+      const firstFrac = condFracs[0];
+      const replicate = firstFrac?.replicate;
+      const plate = firstFrac?.plate;
+      const dsId = `${fileName}_${cond}`;
+
+      if (shouldAggregate) {
+        const aggMap = new Map<
+          string,
+          {
+            gene: string;
+            uniprot: string;
+            description: string;
+            mw?: number;
+            sums: number[];
+            counts: number[];
+            rowCount: number;
+          }
+        >();
+        let totalSourceRows = 0;
+
+        for (const row of rawRows) {
+          const { gene, uniprot, description, mw } = resolveRowIdentity(row);
+          if (!gene) continue;
+
+          const key =
+            inspection.isPrecursorMatrix && uniprot
+              ? uniprot.toLowerCase()
+              : gene.toLowerCase();
+          let entry = aggMap.get(key);
+          if (!entry) {
+            entry = {
+              gene,
+              uniprot,
+              description,
+              mw,
+              sums: new Array(condFracs.length).fill(0),
+              counts: new Array(condFracs.length).fill(0),
+              rowCount: 0
+            };
+            aggMap.set(key, entry);
+          } else {
+            if (!entry.uniprot && uniprot) entry.uniprot = uniprot;
+            if (!entry.description && description) entry.description = description;
+            if (entry.mw === undefined && mw !== undefined) entry.mw = mw;
+          }
+
+          entry.rowCount += 1;
+          totalSourceRows += 1;
+
+          for (let i = 0; i < condFracs.length; i++) {
+            const val = parseNumericIntensity(row[condFracs[i].colName]);
+            if (val > 0) {
+              entry.sums[i] += val;
+              entry.counts[i] += 1;
+            }
+          }
+        }
+
+        metaMap.set(dsId, {
+          id: dsId,
+          name: `${fileName} (${cond})`,
+          condition: cond,
+          replicate,
+          plate,
+          fractionCount: condFracs.length,
+          fractionNames: fracNames,
+          proteinCount: aggMap.size,
+          precursorCount: inspection.isPrecursorMatrix || totalSourceRows > aggMap.size ? totalSourceRows : undefined,
+          source: 'upload'
+        });
+
+        // Disambiguate display names if two distinct protein groups share the exact same label (e.g. "hypothetical protein")
+        const nameCountsA = new Map<string, number>();
+        aggMap.forEach(entry => {
+          const k = entry.gene.toLowerCase();
+          nameCountsA.set(k, (nameCountsA.get(k) || 0) + 1);
+        });
+
+        let idx = 0;
+        aggMap.forEach(entry => {
+          const displayGene =
+            (nameCountsA.get(entry.gene.toLowerCase()) || 0) > 1 &&
+            entry.uniprot &&
+            entry.uniprot.toLowerCase() !== entry.gene.toLowerCase()
+              ? `${entry.gene} [${entry.uniprot}]`
+              : entry.gene;
+          const values =
+            aggregationMode === 'mean'
+              ? entry.sums.map((s, i) => (entry.counts[i] > 0 ? s / entry.counts[i] : 0))
+              : entry.sums;
+          const apex = findApex(values, fracNumbers);
+          profiles.push({
+            id: `${displayGene}__${cond}__${idx++}`,
+            gene: displayGene,
+            uniprot: entry.uniprot,
+            description: entry.description,
+            mw: entry.mw,
+            condition: cond,
+            replicate,
+            plate,
+            fractions: fracNumbers,
+            values,
+            apexFraction: apex.apexFraction,
+            apexIntensity: apex.apexIntensity,
+            totalArea: apex.totalArea
+          });
+        });
+      } else {
+        let proteinCount = 0;
+        for (let idx = 0; idx < rawRows.length; idx++) {
+          const row = rawRows[idx];
+          const { gene, uniprot, description, mw } = resolveRowIdentity(row);
+          if (!gene) continue;
+
+          proteinCount += 1;
+          const values = condFracs.map(f => parseNumericIntensity(row[f.colName]));
+          const apex = findApex(values, fracNumbers);
+
+          profiles.push({
+            id: `${gene}__${cond}__${idx}`,
+            gene,
+            uniprot,
+            description,
+            mw,
+            condition: cond,
+            replicate,
+            plate,
+            fractions: fracNumbers,
+            values,
+            apexFraction: apex.apexFraction,
+            apexIntensity: apex.apexIntensity,
+            totalArea: apex.totalArea
+          });
+        }
+
+        metaMap.set(dsId, {
+          id: dsId,
+          name: `${fileName} (${cond})`,
+          condition: cond,
+          replicate,
+          plate,
+          fractionCount: condFracs.length,
+          fractionNames: fracNames,
+          proteinCount,
+          source: 'upload'
+        });
+      }
+    }
+  } else {
+    // CASE B: Standard single-run or stacked format
+    const sortedFracs = fractionHeaders
+      .filter(f => !f.condition || conditionPrefixes.size <= 1)
+      .sort((a, b) => a.fracNum - b.fracNum);
+
+    const fracNumbers = sortedFracs.map(f => f.fracNum);
+    const fracNames = sortedFracs.map(f => f.colName);
+    const headerReplicate = sortedFracs[0]?.replicate;
+    const headerPlate = sortedFracs[0]?.plate;
+
+    if (shouldAggregate) {
+      const datasetAgg = new Map<
+        string,
+        {
+          condition: string;
+          replicate?: string;
+          plate?: string;
+          sourceRows: number;
+          proteins: Map<
+            string,
+            {
+              gene: string;
+              uniprot: string;
+              description: string;
+              mw?: number;
+              sums: number[];
+              counts: number[];
+            }
+          >;
+        }
+      >();
+
+      for (let idx = 0; idx < rawRows.length; idx++) {
+        const row = rawRows[idx];
+        const { gene, uniprot, description, mw } = resolveRowIdentity(row);
+        if (!gene) continue;
+
+        const condition =
+          conditionCol && row[conditionCol] ? row[conditionCol].trim() : singleConditionLabel;
+        const replicate =
+          replicateCol && row[replicateCol] ? row[replicateCol].trim() : headerReplicate;
+        const plate = plateCol && row[plateCol] ? row[plateCol].trim() : headerPlate;
+
+        const dsKey = `${condition}_${replicate || 'rep1'}_${plate || 'plate1'}`;
+        let ds = datasetAgg.get(dsKey);
+        if (!ds) {
+          ds = {
+            condition,
+            replicate,
+            plate,
+            sourceRows: 0,
+            proteins: new Map()
+          };
+          datasetAgg.set(dsKey, ds);
+        }
+
+        ds.sourceRows += 1;
+        const pKey =
+          inspection.isPrecursorMatrix && uniprot
+            ? uniprot.toLowerCase()
+            : gene.toLowerCase();
+        let entry = ds.proteins.get(pKey);
+        if (!entry) {
+          entry = {
+            gene,
+            uniprot,
+            description,
+            mw,
+            sums: new Array(sortedFracs.length).fill(0),
+            counts: new Array(sortedFracs.length).fill(0)
+          };
+          ds.proteins.set(pKey, entry);
+        } else {
+          if (!entry.uniprot && uniprot) entry.uniprot = uniprot;
+          if (!entry.description && description) entry.description = description;
+          if (entry.mw === undefined && mw !== undefined) entry.mw = mw;
+        }
+
+        for (let i = 0; i < sortedFracs.length; i++) {
+          const val = parseNumericIntensity(row[sortedFracs[i].colName]);
+          if (val > 0) {
+            entry.sums[i] += val;
+            entry.counts[i] += 1;
+          }
+        }
+      }
+
+      datasetAgg.forEach((ds, dsKey) => {
+        metaMap.set(dsKey, {
+          id: dsKey,
+          name: `${ds.condition}${ds.replicate ? ` (${ds.replicate})` : ''}`,
+          condition: ds.condition,
+          replicate: ds.replicate,
+          plate: ds.plate,
+          fractionCount: sortedFracs.length,
+          fractionNames: fracNames,
+          proteinCount: ds.proteins.size,
+          precursorCount:
+            inspection.isPrecursorMatrix || ds.sourceRows > ds.proteins.size ? ds.sourceRows : undefined,
+          source: 'upload'
+        });
+
+        const nameCountsB = new Map<string, number>();
+        ds.proteins.forEach(entry => {
+          const k = entry.gene.toLowerCase();
+          nameCountsB.set(k, (nameCountsB.get(k) || 0) + 1);
+        });
+
+        let idx = 0;
+        ds.proteins.forEach(entry => {
+          const displayGene =
+            (nameCountsB.get(entry.gene.toLowerCase()) || 0) > 1 &&
+            entry.uniprot &&
+            entry.uniprot.toLowerCase() !== entry.gene.toLowerCase()
+              ? `${entry.gene} [${entry.uniprot}]`
+              : entry.gene;
+          const values =
+            aggregationMode === 'mean'
+              ? entry.sums.map((s, i) => (entry.counts[i] > 0 ? s / entry.counts[i] : 0))
+              : entry.sums;
+          const apex = findApex(values, fracNumbers);
+          profiles.push({
+            id: `${displayGene}__${ds.condition}__${ds.replicate || ''}__${ds.plate || ''}__${idx++}`,
+            gene: displayGene,
+            uniprot: entry.uniprot,
+            description: entry.description,
+            mw: entry.mw,
+            condition: ds.condition,
+            replicate: ds.replicate,
+            plate: ds.plate,
+            fractions: fracNumbers,
+            values,
+            apexFraction: apex.apexFraction,
+            apexIntensity: apex.apexIntensity,
+            totalArea: apex.totalArea
+          });
+        });
+      });
+    } else {
+      for (let idx = 0; idx < rawRows.length; idx++) {
+        const row = rawRows[idx];
+        const { gene, uniprot, description, mw } = resolveRowIdentity(row);
+        if (!gene) continue;
+
+        const condition =
+          conditionCol && row[conditionCol] ? row[conditionCol].trim() : singleConditionLabel;
+        const replicate =
+          replicateCol && row[replicateCol] ? row[replicateCol].trim() : headerReplicate;
+        const plate = plateCol && row[plateCol] ? row[plateCol].trim() : headerPlate;
+
+        const values = sortedFracs.map(f => parseNumericIntensity(row[f.colName]));
+        const apex = findApex(values, fracNumbers);
+
+        const dsKey = `${condition}_${replicate || 'rep1'}_${plate || 'plate1'}`;
+        if (!metaMap.has(dsKey)) {
+          metaMap.set(dsKey, {
+            id: dsKey,
+            name: `${condition}${replicate ? ` (${replicate})` : ''}`,
+            condition,
+            replicate,
+            plate,
+            fractionCount: sortedFracs.length,
+            fractionNames: fracNames,
+            proteinCount: 0,
+            source: 'upload'
+          });
+        }
+        const currentMeta = metaMap.get(dsKey)!;
+        currentMeta.proteinCount += 1;
+
+        profiles.push({
+          id: `${gene}__${condition}__${replicate || ''}__${plate || ''}__${idx}`,
+          gene,
+          uniprot,
+          description,
+          mw,
+          condition,
+          replicate,
+          plate,
+          fractions: fracNumbers,
+          values,
+          apexFraction: apex.apexFraction,
+          apexIntensity: apex.apexIntensity,
+          totalArea: apex.totalArea
+        });
+      }
+    }
+  }
+
+  if (profiles.length === 0) {
+    throw new Error(
+      `No valid protein rows were found using "${proteinNameCol}" as the protein name column. Try selecting a different Protein / Gene Name column.`
+    );
+  }
+
+  return {
+    profiles,
+    metadata: Array.from(metaMap.values())
+  };
+}
+
+/**
+ * Intelligent one-step parser for single or multi-condition SEC DIA CSV/TSV files,
+ * including raw DIA-NN matrices (pg_matrix.tsv, pr_matrix.tsv, gg_matrix.tsv).
+ */
+export async function parseSECDIAData(
+  fileOrText: File | string,
+  fileName: string = 'SEC_Data.csv',
+  fallbackCondition?: string,
+  mappingOverride?: Partial<ColumnMapping>
+): Promise<{ profiles: ProteinProfile[]; metadata: DatasetMeta[] }> {
+  const inspection = await inspectSECDIAFile(fileOrText, fileName);
+  return buildProfilesFromInspection(inspection, mappingOverride, fallbackCondition);
 }
 
 /**

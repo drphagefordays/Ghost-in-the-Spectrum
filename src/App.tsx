@@ -204,26 +204,39 @@ export const App: React.FC = () => {
     return list;
   }, [activeOverlays, profiles, primaryQueryProfile]);
 
-  // Autocomplete suggestions for top search bar
+  // Autocomplete suggestions for top search bar (exact/prefix matches prioritized)
   const searchSuggestions = useMemo(() => {
     if (!searchQuery.trim() || searchQuery.length < 2) return [];
     const term = searchQuery.toLowerCase();
-    const matches: { gene: string; desc: string; uniprot: string }[] = [];
+    const prefixMatches: { gene: string; desc: string; uniprot: string }[] = [];
+    const otherMatches: { gene: string; desc: string; uniprot: string }[] = [];
 
     for (const gene of allGenesList) {
       const p = profilesByGene.get(gene.toLowerCase())?.[0];
       if (!p) continue;
-      if (
-        p.gene.toLowerCase().includes(term) ||
+      const gLower = p.gene.toLowerCase();
+      if (gLower.startsWith(term)) {
+        prefixMatches.push({ gene: p.gene, desc: p.description, uniprot: p.uniprot });
+        if (prefixMatches.length >= 10) break;
+      } else if (
+        gLower.includes(term) ||
         (p.uniprot && p.uniprot.toLowerCase().includes(term)) ||
         (p.description && p.description.toLowerCase().includes(term))
       ) {
-        matches.push({ gene: p.gene, desc: p.description, uniprot: p.uniprot });
-        if (matches.length >= 8) break;
+        if (otherMatches.length < 10) {
+          otherMatches.push({ gene: p.gene, desc: p.description, uniprot: p.uniprot });
+        }
       }
     }
-    return matches;
+    return [...prefixMatches, ...otherMatches].slice(0, 10);
   }, [searchQuery, allGenesList, profilesByGene]);
+
+  const searchPlaceholder = useMemo(() => {
+    const examples = allGenesList.slice(0, 3).map(g => (g.length > 18 ? `${g.slice(0, 17)}…` : g));
+    return examples.length > 0
+      ? `Search protein by name, ID, or description (e.g. ${examples.join(', ')})...`
+      : 'Search target protein by name, ID, or description...';
+  }, [allGenesList]);
 
   // Handlers
   const handleSelectGene = (gene: string) => {
@@ -300,7 +313,7 @@ export const App: React.FC = () => {
                 <Search className="w-5 h-5 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
-                  placeholder="Search target protein (e.g. dnaN, recF, gyrB, MSMEG_0002)..."
+                  placeholder={searchPlaceholder}
                   value={searchQuery}
                   onChange={(e) => {
                     setSearchQuery(e.target.value);
@@ -320,16 +333,18 @@ export const App: React.FC = () => {
                       onClick={() => handleSelectGene(s.gene)}
                       className="p-3 hover:bg-teal-950/40 cursor-pointer transition flex items-center justify-between text-xs"
                     >
-                      <div>
+                      <div className="min-w-0 pr-2">
                         <div className="font-bold text-white text-sm flex items-center space-x-2">
-                          <span>{s.gene}</span>
-                          {s.uniprot && (
-                            <span className="font-mono text-slate-400 text-xs">{s.uniprot}</span>
+                          <span className="truncate max-w-xs" title={s.gene}>{s.gene}</span>
+                          {s.uniprot && s.uniprot.toLowerCase() !== s.gene.toLowerCase() && (
+                            <span className="font-mono text-slate-400 text-xs shrink-0">{s.uniprot}</span>
                           )}
                         </div>
-                        <div className="text-slate-400 text-[11px] truncate max-w-md">{s.desc}</div>
+                        {s.desc && (
+                          <div className="text-slate-400 text-[11px] truncate max-w-md">{s.desc}</div>
+                        )}
                       </div>
-                      <ArrowRight className="w-4 h-4 text-teal-400 opacity-60" />
+                      <ArrowRight className="w-4 h-4 text-teal-400 opacity-60 shrink-0" />
                     </div>
                   ))}
                 </div>
@@ -340,12 +355,18 @@ export const App: React.FC = () => {
             {primaryQueryProfile && (
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 {/* Gene Badge */}
-                <div className="px-3 py-1.5 rounded-xl bg-teal-500/10 border border-teal-500/30 text-teal-300 font-bold flex items-center space-x-1.5">
-                  <Activity className="w-4 h-4 text-teal-400" />
-                  <span>{primaryQueryProfile.gene}</span>
-                  {primaryQueryProfile.uniprot && (
-                    <span className="text-[11px] font-mono text-slate-400">({primaryQueryProfile.uniprot})</span>
-                  )}
+                <div
+                  className="px-3 py-1.5 rounded-xl bg-teal-500/10 border border-teal-500/30 text-teal-300 font-bold flex items-center space-x-1.5 max-w-xs"
+                  title={primaryQueryProfile.gene}
+                >
+                  <Activity className="w-4 h-4 text-teal-400 shrink-0" />
+                  <span className="truncate">{primaryQueryProfile.gene}</span>
+                  {primaryQueryProfile.uniprot &&
+                    primaryQueryProfile.uniprot.toLowerCase() !== primaryQueryProfile.gene.toLowerCase() && (
+                      <span className="text-[11px] font-mono text-slate-400 shrink-0">
+                        ({primaryQueryProfile.uniprot})
+                      </span>
+                    )}
                 </div>
 
                 {/* Primary Apex Fraction */}

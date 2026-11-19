@@ -238,7 +238,7 @@ export const SameFractionTable: React.FC<SameFractionTableProps> = ({
                   <ArrowUpDown className="w-3 h-3" />
                 </div>
               </th>
-              <th className="py-2.5 px-3">UniProt</th>
+              <th className="py-2.5 px-3">Accession / ID</th>
               <th className="py-2.5 px-3 cursor-pointer hover:text-white" onClick={() => handleSort('offset')}>
                 <div className="flex items-center space-x-1">
                   <span>Apex Frac (ΔF)</span>
@@ -297,10 +297,12 @@ export const SameFractionTable: React.FC<SameFractionTableProps> = ({
                     {/* Gene Name & Badges */}
                     <td className="py-2.5 px-3">
                       <div className="flex items-center space-x-2">
-                        <span className="font-bold text-white">{c.profile.gene}</span>
+                        <span className="font-bold text-white truncate max-w-xs" title={c.profile.gene}>
+                          {c.profile.gene}
+                        </span>
                         {c.inSameComplex && (
                           <span
-                            className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center space-x-0.5 cursor-pointer"
+                            className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center space-x-0.5 cursor-pointer shrink-0"
                             onClick={() => c.complexIds[0] && onInspectComplex && onInspectComplex(c.complexIds[0])}
                             title={`Member of ${c.complexIds.join(', ')}`}
                           >
@@ -310,7 +312,7 @@ export const SameFractionTable: React.FC<SameFractionTableProps> = ({
                         )}
                         {c.isKnownInteractor && (
                           <span
-                            className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-purple-500/20 text-purple-300 border border-purple-500/30 flex items-center space-x-0.5"
+                            className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-purple-500/20 text-purple-300 border border-purple-500/30 flex items-center space-x-0.5 shrink-0"
                             title="Direct PCprophet PPI Partner"
                           >
                             <Share2 className="w-2.5 h-2.5 mr-0.5" />
@@ -323,18 +325,26 @@ export const SameFractionTable: React.FC<SameFractionTableProps> = ({
                       </div>
                     </td>
 
-                    {/* UniProt */}
+                    {/* Accession / UniProt */}
                     <td className="py-2.5 px-3 font-mono text-slate-300">
                       {c.profile.uniprot ? (
-                        <a
-                          href={`https://www.uniprot.org/uniprotkb/${c.profile.uniprot}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="hover:text-teal-400 flex items-center space-x-1"
-                        >
-                          <span>{c.profile.uniprot}</span>
-                          <ExternalLink className="w-2.5 h-2.5 opacity-60" />
-                        </a>
+                        /^[OPQ][0-9][A-Z0-9]{3}[0-9](-\d+)?$|^[A-NR-Z][0-9]([A-Z][A-Z0-9]{2}[0-9]){1,2}(-\d+)?$/i.test(
+                          c.profile.uniprot
+                        ) ? (
+                          <a
+                            href={`https://www.uniprot.org/uniprotkb/${c.profile.uniprot}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="hover:text-teal-400 flex items-center space-x-1"
+                          >
+                            <span>{c.profile.uniprot}</span>
+                            <ExternalLink className="w-2.5 h-2.5 opacity-60" />
+                          </a>
+                        ) : (
+                          <span className="truncate max-w-[140px] inline-block" title={c.profile.uniprot}>
+                            {c.profile.uniprot}
+                          </span>
+                        )
                       ) : (
                         '—'
                       )}

@@ -390,7 +390,9 @@ export const ChromatogramViewer: React.FC<ChromatogramViewerProps> = ({
                 borderStyle: curve.dashed ? 'dashed' : 'solid'
               }}
             />
-            <span className="font-medium text-slate-200">{curve.label}</span>
+            <span className="font-medium text-slate-200 max-w-[260px] truncate" title={curve.label}>
+              {curve.label}
+            </span>
             <span className="text-[10px] text-slate-400 px-1 py-0.2 bg-slate-800 rounded">
               Apex: F{curve.apexFraction}
             </span>
