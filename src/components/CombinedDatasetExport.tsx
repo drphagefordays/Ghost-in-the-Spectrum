@@ -236,7 +236,14 @@ export const CombinedDatasetExport: React.FC<CombinedDatasetExportProps> = ({
                   <td className="py-2.5 px-3">{ds.replicate || 'Rep 1'}</td>
                   <td className="py-2.5 px-3">{ds.plate || 'Plate 1'}</td>
                   <td className="py-2.5 px-3 font-mono">{ds.fractionCount} Fractions</td>
-                  <td className="py-2.5 px-3 font-mono">{ds.proteinCount.toLocaleString()} Proteins</td>
+                  <td className="py-2.5 px-3 font-mono">
+                    {ds.proteinCount.toLocaleString()} Proteins
+                    {ds.precursorCount ? (
+                      <span className="text-[10px] text-slate-500 ml-1">
+                        ({ds.precursorCount.toLocaleString()} precursors)
+                      </span>
+                    ) : null}
+                  </td>
                   <td className="py-2.5 px-3 text-right">
                     <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/20 text-emerald-400">
                       Active

@@ -8,7 +8,7 @@ import { UploadCloud, X, FileText, CheckCircle2, AlertCircle, Sparkles, ShieldCh
 interface DataIngestionModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onDataLoaded: (profiles: ProteinProfile[], metadata: DatasetMeta[]) => void;
+  onDataLoaded: (profiles: ProteinProfile[], metadata: DatasetMeta[], isAnonymized: boolean) => void;
 }
 
 export const DataIngestionModal: React.FC<DataIngestionModalProps> = ({
@@ -44,26 +44,32 @@ export const DataIngestionModal: React.FC<DataIngestionModalProps> = ({
         allNewMeta.push(...res.metadata);
       }
 
+      const totalPrecursors = allNewMeta.reduce((acc, m) => acc + (m.precursorCount || 0), 0);
+      const rollupNote =
+        totalPrecursors > 0
+          ? ` (rolled up from ${totalPrecursors.toLocaleString()} precursors)`
+          : '';
+
       if (autoAnonymize) {
         const anonRes = anonymizeProfiles(allNewProfiles);
         allNewProfiles = anonRes.anonymizedProfiles;
         const keyCsv = exportAnonymizationKeyCSV(anonRes.keyEntries);
         setDownloadableKey(keyCsv);
         setSuccessSummary(
-          `Imported ${allNewProfiles.length.toLocaleString()} profiles. GDPR Anonymization applied!`
+          `Imported ${allNewProfiles.length.toLocaleString()} protein profiles${rollupNote}. GDPR Anonymization applied!`
         );
       } else {
         setSuccessSummary(
-          `Successfully imported ${allNewProfiles.length.toLocaleString()} profiles across ${allNewMeta.length} run(s)!`
+          `Successfully imported ${allNewProfiles.length.toLocaleString()} protein profiles${rollupNote} across ${allNewMeta.length} run(s)!`
         );
       }
 
-      onDataLoaded(allNewProfiles, allNewMeta);
+      onDataLoaded(allNewProfiles, allNewMeta, autoAnonymize);
       if (!autoAnonymize) {
         setTimeout(() => onClose(), 1200);
       }
     } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to parse CSV file(s). Please verify formatting.');
+      setErrorMsg(err.message || 'Failed to parse file(s). Please verify formatting.');
     } finally {
       setLoading(false);
     }
@@ -86,7 +92,7 @@ export const DataIngestionModal: React.FC<DataIngestionModalProps> = ({
           <div>
             <h3 className="text-base font-bold text-white">Ingest SEC DIA Datasets</h3>
             <p className="text-xs text-slate-400">
-              Supports single CSVs, multi-file batch upload, or unified combined matrices.
+              Supports DIA-NN matrices (pr_matrix, pg_matrix, gg_matrix TSV), CSVs, or multi-file batch uploads.
             </p>
           </div>
         </div>
@@ -150,10 +156,10 @@ export const DataIngestionModal: React.FC<DataIngestionModalProps> = ({
         >
           <UploadCloud className="w-10 h-10 text-teal-400 mx-auto mb-3" />
           <p className="text-sm font-semibold text-slate-200">
-            {loading ? 'Processing & parsing matrix...' : 'Drop CSV files here or click to browse'}
+            {loading ? 'Processing & parsing matrix...' : 'Drop CSV / TSV files here or click to browse'}
           </p>
           <p className="text-xs text-slate-400 mt-1 mb-3">
-            Accepts multiple individual files (e.g. 60min + 120min) or combined datasets.
+            Accepts DIA-NN TSV matrices (pg/pr/gg_matrix), individual CSVs, or combined datasets.
           </p>
           <button
             type="button"
@@ -163,7 +169,7 @@ export const DataIngestionModal: React.FC<DataIngestionModalProps> = ({
             }}
             className="inline-flex items-center space-x-1.5 px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-teal-400 hover:text-teal-300 rounded-lg text-xs font-semibold border border-slate-700 shadow-sm transition"
           >
-            <span>Browse CSV Files</span>
+            <span>Browse CSV / TSV Files</span>
           </button>
         </div>
 
@@ -182,18 +188,29 @@ export const DataIngestionModal: React.FC<DataIngestionModalProps> = ({
               <span className="font-semibold">{successSummary}</span>
             </div>
             {downloadableKey && (
-              <div className="pt-2 border-t border-emerald-500/20 flex items-center justify-between">
+              <div className="pt-2 border-t border-emerald-500/20 flex flex-wrap items-center justify-between gap-2">
                 <span className="text-[11px] text-emerald-400">Save your private de-anonymization mapping key locally:</span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    downloadFile(downloadableKey, 'private_deanonymization_key.csv');
-                  }}
-                  className="flex items-center space-x-1 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-[11px] font-bold shadow transition"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Download Key (.csv)</span>
-                </button>
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      downloadFile(downloadableKey, 'private_deanonymization_key.csv');
+                    }}
+                    className="flex items-center space-x-1 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-[11px] font-bold shadow transition"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download Key (.csv)</span>
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onClose();
+                    }}
+                    className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-[11px] font-semibold border border-slate-700 transition"
+                  >
+                    Explore Data
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -206,9 +223,9 @@ export const DataIngestionModal: React.FC<DataIngestionModalProps> = ({
             <span>Intelligent Format Auto-Detection:</span>
           </div>
           <ul className="list-disc list-inside space-y-1 pl-1 text-[11px]">
-            <li><b>Flexible Fractions:</b> Automatically handles any fraction count (24, 48, 70, 96, etc.).</li>
-            <li><b>Multi-Replicate & Plates:</b> Identifies <code className="text-slate-300">Replicate</code>, <code className="text-slate-300">Plate</code>, or embedded header prefixes.</li>
-            <li><b>Multi-File Batch:</b> Select multiple CSVs at once; condition names are automatically inferred.</li>
+            <li><b>DIA-NN & Raw MS Matrices:</b> Natively parses <code className="text-slate-300">pg_matrix.tsv</code>, <code className="text-slate-300">pr_matrix.tsv</code> (auto-aggregated to protein level), <code className="text-slate-300">gg_matrix.tsv</code>, and raw run paths (e.g. <code className="text-slate-300">G:\...\Sample_F01_Slot2-01.d</code>).</li>
+            <li><b>Flexible Fractions:</b> Automatically detects and numerically sorts any fraction count (24, 36, 48, 70, 96, etc.).</li>
+            <li><b>Multi-File Batch & Replicates:</b> Drop multiple CSV/TSV files at once; conditions, replicates, and plates are inferred automatically.</li>
           </ul>
         </div>
       </div>

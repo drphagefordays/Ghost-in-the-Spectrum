@@ -42,7 +42,7 @@ export function anonymizeProfiles(profiles: ProteinProfile[]): AnonymizationResu
   const keyEntries: AnonymizationKeyEntry[] = [];
   const processedGenes = new Set<string>();
 
-  const anonymizedProfiles: ProteinProfile[] = profiles.map(p => {
+  const anonymizedProfiles: ProteinProfile[] = profiles.map((p, idx) => {
     const anonGene = geneMap.get(p.gene.toLowerCase()) || p.gene;
     const anonUniProt = p.uniprot ? (uniprotMap.get(p.uniprot.toLowerCase()) || `UP_${anonGene.replace('PRT_', '')}`) : '';
     const anonDesc = p.description ? (descMap.get(p.description) || `DESC_${anonGene.replace('PRT_', '')}`) : '';
@@ -61,7 +61,7 @@ export function anonymizeProfiles(profiles: ProteinProfile[]): AnonymizationResu
 
     return {
       ...p,
-      id: `${anonGene}__${p.condition}__${p.replicate || ''}__${p.plate || ''}`,
+      id: `${anonGene}__${p.condition}__${p.replicate || ''}__${p.plate || ''}__${idx}`,
       gene: anonGene,
       uniprot: anonUniProt,
       description: anonDesc

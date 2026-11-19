@@ -59,8 +59,9 @@ export const ChromatogramViewer: React.FC<ChromatogramViewerProps> = ({
   }[] = [];
 
   // Primary profiles (conditions of the current protein)
+  const fallbackPalette = ['#2dd4bf', '#fb7185', '#38bdf8', '#f59e0b', '#a78bfa', '#4ade80', '#ec4899'];
   primaryProfiles.forEach((p, idx) => {
-    const color = CONDITION_COLORS[p.condition] || (idx === 0 ? '#2dd4bf' : '#fb7185');
+    const color = CONDITION_COLORS[p.condition] || fallbackPalette[idx % fallbackPalette.length];
     allCurves.push({
       key: `primary_${p.id}`,
       label: `${p.gene} [${p.condition}${p.replicate ? ` ${p.replicate}` : ''}]`,
@@ -200,8 +201,8 @@ export const ChromatogramViewer: React.FC<ChromatogramViewerProps> = ({
           className="w-full h-auto cursor-crosshair bg-slate-950/60 rounded-xl border border-slate-800/80"
           onMouseMove={(e) => {
             const rect = e.currentTarget.getBoundingClientRect();
-            const clickX = e.clientX - rect.left;
-            const frac = Math.round(minFrac + ((clickX - margin.left) / plotWidth) * (maxFrac - minFrac));
+            const svgX = ((e.clientX - rect.left) / (rect.width || 1)) * width;
+            const frac = Math.round(minFrac + ((svgX - margin.left) / plotWidth) * (maxFrac - minFrac));
             if (frac >= minFrac && frac <= maxFrac) {
               setHoveredFraction(frac);
             }
@@ -209,8 +210,8 @@ export const ChromatogramViewer: React.FC<ChromatogramViewerProps> = ({
           onMouseLeave={() => setHoveredFraction(null)}
           onClick={(e) => {
             const rect = e.currentTarget.getBoundingClientRect();
-            const clickX = e.clientX - rect.left;
-            const frac = Math.round(minFrac + ((clickX - margin.left) / plotWidth) * (maxFrac - minFrac));
+            const svgX = ((e.clientX - rect.left) / (rect.width || 1)) * width;
+            const frac = Math.round(minFrac + ((svgX - margin.left) / plotWidth) * (maxFrac - minFrac));
             if (frac >= minFrac && frac <= maxFrac) {
               onSelectFraction(frac);
             }

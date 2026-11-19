@@ -23,6 +23,7 @@ export interface DatasetMeta {
   fractionCount: number;
   fractionNames: string[];
   proteinCount: number;
+  precursorCount?: number;
   source: 'preset' | 'upload';
 }
 

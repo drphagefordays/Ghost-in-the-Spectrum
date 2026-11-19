@@ -37,6 +37,7 @@ export const App: React.FC = () => {
 
   // Upload modal
   const [isUploadOpen, setIsUploadOpen] = useState<boolean>(false);
+  const [isAnonymized, setIsAnonymized] = useState<boolean>(true);
 
   // Initial Data Loading: Load pre-bundled combined matrix + PCprophet JSON
   useEffect(() => {
@@ -237,11 +238,21 @@ export const App: React.FC = () => {
     downloadFile(csv, 'report_pg_matrix_combined_app.csv');
   };
 
-  const handleCustomDataLoaded = (newProfiles: ProteinProfile[], newMeta: DatasetMeta[]) => {
+  const handleCustomDataLoaded = (
+    newProfiles: ProteinProfile[],
+    newMeta: DatasetMeta[],
+    anonymized: boolean
+  ) => {
     setProfiles(newProfiles);
     setDatasets(newMeta);
+    setComplexes([]);
+    setPpis([]);
+    setActiveOverlays(new Set());
+    setSelectedComplexId(null);
+    setIsAnonymized(anonymized);
     if (newProfiles.length > 0) {
-      setSelectedGene(newProfiles[0].gene);
+      const firstActive = newProfiles.find(p => p.apexIntensity > 0) || newProfiles[0];
+      setSelectedGene(firstActive.gene);
     }
   };
 
@@ -275,6 +286,7 @@ export const App: React.FC = () => {
         totalProteins={allGenesList.length}
         activeConditions={activeConditions}
         fractionCount={profiles[0]?.fractions.length || 70}
+        isAnonymized={isAnonymized}
       />
 
       {/* Main Container */}
