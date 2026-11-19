@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { ProteinProfile, DatasetMeta, PCprophetComplex, PCprophetPPI, NormalizationMode } from './types/sec';
 import { parseSECDIAData, exportCombinedCSV } from './utils/parser';
+import { discoverCoelutingComplexes, parsePCprophetFile, DiscoveryOptions } from './utils/complexDiscovery';
 import { calculatePearsonR } from './utils/statistics';
 import { downloadFile } from './utils/export';
 import { Navbar } from './components/Navbar';
 import { ChromatogramViewer, OverlayProfile } from './components/ChromatogramViewer';
 import { SameFractionTable } from './components/SameFractionTable';
-import { PCprophetHub } from './components/PCprophetHub';
+import { PCprophetHub, ComplexSourceMode } from './components/PCprophetHub';
 import { InteractorsHub } from './components/InteractorsHub';
 import { CombinedDatasetExport } from './components/CombinedDatasetExport';
 import { DataIngestionModal } from './components/DataIngestionModal';
@@ -35,9 +36,14 @@ export const App: React.FC = () => {
   // Active overlay traces (toggled from SameFractionTable)
   const [activeOverlays, setActiveOverlays] = useState<Set<string>>(new Set());
 
-  // Upload modal
+  // Upload modal & complex discovery state
   const [isUploadOpen, setIsUploadOpen] = useState<boolean>(false);
   const [isAnonymized, setIsAnonymized] = useState<boolean>(true);
+  const [complexSource, setComplexSource] = useState<ComplexSourceMode>('preset');
+  const [discoveryOptions, setDiscoveryOptions] = useState<DiscoveryOptions>({
+    minPearsonR: 0.82,
+    peakTolerance: 1
+  });
 
   // Initial Data Loading: Load pre-bundled combined matrix + PCprophet JSON
   useEffect(() => {
@@ -258,15 +264,46 @@ export const App: React.FC = () => {
   ) => {
     setProfiles(newProfiles);
     setDatasets(newMeta);
-    setComplexes([]);
-    setPpis([]);
     setActiveOverlays(new Set());
-    setSelectedComplexId(null);
     setIsAnonymized(anonymized);
+
+    // Automatically run de novo SEC co-elution complex & PPI discovery on the uploaded dataset
+    const discovered = discoverCoelutingComplexes(newProfiles, discoveryOptions);
+    setComplexes(discovered.complexes);
+    setPpis(discovered.ppis);
+    setComplexSource('discovered');
+    setSelectedComplexId(discovered.complexes[0]?.id || null);
+
     if (newProfiles.length > 0) {
+      const topComplexGene = discovered.complexes[0]?.members[0];
+      const hasTopComplexGene =
+        topComplexGene &&
+        newProfiles.some(p => p.gene.toLowerCase() === topComplexGene.toLowerCase());
       const firstActive = newProfiles.find(p => p.apexIntensity > 0) || newProfiles[0];
-      setSelectedGene(firstActive.gene);
+      setSelectedGene(hasTopComplexGene ? topComplexGene : firstActive.gene);
     }
+  };
+
+  const handleRunDiscovery = (nextOptions: DiscoveryOptions) => {
+    setDiscoveryOptions(nextOptions);
+    const discovered = discoverCoelutingComplexes(profiles, nextOptions);
+    setComplexes(discovered.complexes);
+    setPpis(discovered.ppis);
+    setComplexSource('discovered');
+    setSelectedComplexId(discovered.complexes[0]?.id || null);
+  };
+
+  const handleImportPCprophetFile = async (file: File) => {
+    const defaultCond = activeConditions[0] || 'Default';
+    const parsed = await parsePCprophetFile(file, file.name, defaultCond);
+    if (parsed.complexes.length > 0) {
+      setComplexes(parsed.complexes);
+      setSelectedComplexId(parsed.complexes[0].id);
+    }
+    if (parsed.ppis.length > 0) {
+      setPpis(parsed.ppis);
+    }
+    setComplexSource('imported');
   };
 
   const handleInspectComplex = (complexId: string) => {
@@ -456,6 +493,10 @@ export const App: React.FC = () => {
             normMode={normMode}
             onSelectProtein={handleSelectGene}
             initialSelectedComplexId={selectedComplexId}
+            complexSource={complexSource}
+            discoveryOptions={discoveryOptions}
+            onRunDiscovery={handleRunDiscovery}
+            onImportPCprophetFile={handleImportPCprophetFile}
           />
         )}
 
@@ -469,6 +510,7 @@ export const App: React.FC = () => {
             selectedGene={selectedGene}
             onSelectGene={handleSelectGene}
             onInspectComplex={handleInspectComplex}
+            complexSource={complexSource}
           />
         )}
 

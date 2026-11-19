@@ -1,9 +1,10 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { PCprophetPPI, ProteinProfile, NormalizationMode } from '../types/sec';
 import { ChromatogramViewer, OverlayProfile } from './ChromatogramViewer';
 import { calculatePearsonR } from '../utils/statistics';
 import { downloadFile } from '../utils/export';
-import { Share2, Search, Download, Layers, Eye, Network, CheckCircle2 } from 'lucide-react';
+import { Share2, Search, Download, Layers, Network, Sparkles } from 'lucide-react';
+import { ComplexSourceMode } from './PCprophetHub';
 
 interface InteractorsHubProps {
   ppis: PCprophetPPI[];
@@ -13,12 +14,18 @@ interface InteractorsHubProps {
   selectedGene: string;
   onSelectGene: (gene: string) => void;
   onInspectComplex?: (complexId: string) => void;
+  complexSource?: ComplexSourceMode;
 }
 
 const INTERACTOR_COLORS = [
   '#fb7185', '#38bdf8', '#f59e0b', '#a78bfa', '#4ade80',
   '#ec4899', '#06b6d4', '#eab308', '#2dd4bf', '#818cf8'
 ];
+
+function shortNodeLabel(label: string, maxLen: number): string {
+  if (label.length <= maxLen) return label;
+  return label.slice(0, maxLen - 1) + '…';
+}
 
 export const InteractorsHub: React.FC<InteractorsHubProps> = ({
   ppis,
@@ -27,18 +34,63 @@ export const InteractorsHub: React.FC<InteractorsHubProps> = ({
   normMode,
   selectedGene,
   onSelectGene,
-  onInspectComplex
+  onInspectComplex,
+  complexSource = 'preset'
 }) => {
   const [searchInput, setSearchInput] = useState<string>('');
   const [conditionFilter, setConditionFilter] = useState<string>('all');
   const [selectedPartner, setSelectedPartner] = useState<string | null>(null);
 
-  // Autocomplete suggestions
+  const conditions = useMemo(() => {
+    const set = new Set<string>();
+    ppis.forEach(p => {
+      if (p.condition) set.add(p.condition);
+    });
+    return Array.from(set);
+  }, [ppis]);
+
+  useEffect(() => {
+    if (conditionFilter !== 'all' && !conditions.includes(conditionFilter)) {
+      setConditionFilter('all');
+    }
+  }, [conditions, conditionFilter]);
+
+  // Top connected hub proteins in the active PPI network (helpful quick-picks if selectedGene has 0 partners)
+  const topHubProteins = useMemo(() => {
+    const counts = new Map<string, { gene: string; degree: number }>();
+    for (const p of ppis) {
+      const aKey = p.geneA.toLowerCase();
+      const bKey = p.geneB.toLowerCase();
+      const ea = counts.get(aKey) || { gene: p.geneA, degree: 0 };
+      ea.degree += 1;
+      counts.set(aKey, ea);
+      const eb = counts.get(bKey) || { gene: p.geneB, degree: 0 };
+      eb.degree += 1;
+      counts.set(bKey, eb);
+    }
+    return Array.from(counts.values())
+      .sort((a, b) => b.degree - a.degree)
+      .slice(0, 6);
+  }, [ppis]);
+
+  // Autocomplete suggestions (searches gene, accession, and description!)
   const searchSuggestions = useMemo(() => {
     if (!searchInput.trim() || searchInput.length < 2) return [];
     const term = searchInput.toLowerCase();
-    return allProteinsList.filter(g => g.toLowerCase().includes(term)).slice(0, 8);
-  }, [searchInput, allProteinsList]);
+    const matches: { gene: string; desc: string }[] = [];
+    for (const g of allProteinsList) {
+      const prof = profilesByGene.get(g.toLowerCase())?.[0];
+      if (
+        g.toLowerCase().includes(term) ||
+        (prof?.uniprot && prof.uniprot.toLowerCase().includes(term)) ||
+        (prof?.description && prof.description.toLowerCase().includes(term))
+      ) {
+        matches.push({ gene: g, desc: prof?.description || '' });
+        if (matches.length >= 8) break;
+      }
+    }
+    return matches;
+  }, [searchInput, allProteinsList, profilesByGene]);
 
   // Find all PPIs for the selected gene
   const genePPIs = useMemo(() => {
@@ -62,6 +114,7 @@ export const InteractorsHub: React.FC<InteractorsHubProps> = ({
     genePPIs.forEach(p => {
       const partner = p.geneA.toLowerCase() === target ? p.geneB : p.geneA;
       const cleanKey = partner.toLowerCase();
+      if (cleanKey === target) return;
       if (!map.has(cleanKey)) {
         map.set(cleanKey, { gene: partner, complexIds: new Set(), conditions: new Set() });
       }
@@ -77,36 +130,50 @@ export const InteractorsHub: React.FC<InteractorsHubProps> = ({
     }));
   }, [genePPIs, selectedGene]);
 
-  // Query protein profiles (e.g. 60min, 120min)
+  // Query protein profiles
   const targetProfiles = useMemo(() => {
     return profilesByGene.get(selectedGene.toLowerCase()) || [];
   }, [profilesByGene, selectedGene]);
 
   const primaryProfile = targetProfiles[0] || null;
 
-  // Interactor profiles with computed correlations
+  // Interactor profiles with computed correlations, sorted strongest first
   const partnerProfilesWithStats = useMemo(() => {
-    return partnersList.map((p, idx) => {
-      const pProfiles = profilesByGene.get(p.gene.toLowerCase()) || [];
-      const bestProfile = pProfiles[0] || null;
+    return partnersList
+      .map(p => {
+        const pProfiles = profilesByGene.get(p.gene.toLowerCase()) || [];
+        const bestProfile =
+          (primaryProfile && pProfiles.find(item => item.condition === primaryProfile.condition)) ||
+          pProfiles[0] ||
+          null;
 
-      let pearsonR: number | undefined = undefined;
-      if (primaryProfile && bestProfile) {
-        pearsonR = calculatePearsonR(primaryProfile.values, bestProfile.values);
-      }
+        let pearsonR: number | undefined = undefined;
+        if (primaryProfile && bestProfile) {
+          pearsonR = calculatePearsonR(primaryProfile.values, bestProfile.values);
+        }
 
-      return {
-        ...p,
-        profile: bestProfile,
-        color: INTERACTOR_COLORS[idx % INTERACTOR_COLORS.length],
-        pearsonR
-      };
-    });
+        return {
+          ...p,
+          profile: bestProfile,
+          pearsonR
+        };
+      })
+      .sort((a, b) => (b.pearsonR ?? -1) - (a.pearsonR ?? -1))
+      .map((item, idx) => ({
+        ...item,
+        color: INTERACTOR_COLORS[idx % INTERACTOR_COLORS.length]
+      }));
   }, [partnersList, profilesByGene, primaryProfile]);
 
-  // Overlays for Chromatogram
+  // Limit radial graph to top 16 partners for visual clarity
+  const graphPartners = useMemo(() => {
+    return partnerProfilesWithStats.slice(0, 16);
+  }, [partnerProfilesWithStats]);
+
+  // Overlays for Chromatogram (top 10 strongest partners so chart remains crisp)
   const overlayProfiles: OverlayProfile[] = useMemo(() => {
     return partnerProfilesWithStats
+      .slice(0, 10)
       .filter((p): p is typeof p & { profile: ProteinProfile } => p.profile !== null)
       .map(p => ({
         profile: p.profile,
@@ -119,15 +186,15 @@ export const InteractorsHub: React.FC<InteractorsHubProps> = ({
   const handleExportCSV = () => {
     const headers = ['QueryGene', 'PartnerGene', 'Conditions', 'ComplexIDs', 'PartnerApex', 'PearsonR_vs_Query'];
     const rows = partnerProfilesWithStats.map(p => [
-      selectedGene,
-      p.gene,
+      `"${selectedGene.replace(/"/g, '""')}"`,
+      `"${p.gene.replace(/"/g, '""')}"`,
       `"${p.conditions.join(';')}"`,
       `"${p.complexIds.join(';')}"`,
       p.profile ? `F${p.profile.apexFraction}` : 'N/A',
       p.pearsonR !== undefined ? p.pearsonR.toFixed(3) : 'N/A'
     ]);
     const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
-    downloadFile(csv, `interactors_${selectedGene}.csv`);
+    downloadFile(csv, `interactors_${selectedGene.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40)}.csv`);
   };
 
   return (
@@ -136,28 +203,62 @@ export const InteractorsHub: React.FC<InteractorsHubProps> = ({
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
-            <div className="flex items-center space-x-2">
+            <div className="flex flex-wrap items-center gap-2">
               <div className="w-8 h-8 rounded-lg bg-teal-500/20 text-teal-400 flex items-center justify-center font-bold">
                 <Share2 className="w-5 h-5" />
               </div>
               <h2 className="text-lg font-bold text-white">Protein Interaction Network (PPI)</h2>
-              <span className="text-xs px-2.5 py-0.5 rounded-full bg-teal-500/10 text-teal-300 border border-teal-500/20 font-semibold">
-                {partnersList.length} Interactors for {selectedGene}
+              <span className="text-xs px-2.5 py-0.5 rounded-full bg-teal-500/10 text-teal-300 border border-teal-500/20 font-semibold max-w-xs truncate" title={selectedGene}>
+                {partnersList.length} Interactors for {shortNodeLabel(selectedGene, 24)}
+              </span>
+              <span
+                className={`text-[11px] px-2 py-0.5 rounded-full font-semibold border flex items-center space-x-1 ${
+                  complexSource === 'discovered'
+                    ? 'bg-sky-500/10 text-sky-300 border-sky-500/20'
+                    : complexSource === 'imported'
+                    ? 'bg-purple-500/10 text-purple-300 border-purple-500/20'
+                    : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
+                }`}
+              >
+                <Sparkles className="w-3 h-3" />
+                <span>
+                  {complexSource === 'discovered'
+                    ? 'De Novo Co-Elution Network'
+                    : complexSource === 'imported'
+                    ? 'Imported PCprophet PPIs'
+                    : 'PCprophet Pre-Loaded'}
+                </span>
               </span>
             </div>
             <p className="text-xs text-slate-400 mt-1">
-              Search any target protein to reveal its PCprophet physical interaction partners, complex memberships, and co-migration curves.
+              Search any target protein to inspect its co-eluting interaction partners, complex memberships, and co-migration curves.
             </p>
           </div>
 
-          {/* Search Box */}
+          {/* Search & Condition Controls */}
           <div className="relative">
-            <div className="flex items-center space-x-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {conditions.length > 1 && (
+                <div className="flex items-center space-x-1.5 bg-slate-950 px-2.5 py-1.5 rounded-xl border border-slate-800 text-xs">
+                  <span className="text-slate-400">Cond:</span>
+                  <select
+                    value={conditionFilter}
+                    onChange={(e) => setConditionFilter(e.target.value)}
+                    className="bg-transparent text-slate-200 font-semibold focus:outline-none cursor-pointer"
+                  >
+                    <option value="all" className="bg-slate-900">All</option>
+                    {conditions.map(c => (
+                      <option key={c} value={c} className="bg-slate-900">{c}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div className="relative">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
-                  placeholder="Search protein (e.g. dnaN, recF)..."
+                  placeholder="Search protein or description..."
                   value={searchInput}
                   onChange={(e) => setSearchInput(e.target.value)}
                   className="bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-teal-500 w-56 sm:w-64"
@@ -166,14 +267,15 @@ export const InteractorsHub: React.FC<InteractorsHubProps> = ({
                   <div className="absolute top-full left-0 right-0 mt-1 bg-slate-950 border border-slate-800 rounded-xl shadow-2xl z-20 overflow-hidden divide-y divide-slate-800/80">
                     {searchSuggestions.map(s => (
                       <div
-                        key={s}
+                        key={s.gene}
                         onClick={() => {
-                          onSelectGene(s);
+                          onSelectGene(s.gene);
                           setSearchInput('');
                         }}
-                        className="px-3 py-2 text-xs text-slate-300 hover:bg-teal-950/40 hover:text-teal-400 cursor-pointer font-bold"
+                        className="px-3 py-2 text-xs text-slate-300 hover:bg-teal-950/40 hover:text-teal-400 cursor-pointer"
                       >
-                        {s}
+                        <div className="font-bold truncate">{s.gene}</div>
+                        {s.desc && <div className="text-[10px] text-slate-500 truncate">{s.desc}</div>}
                       </div>
                     ))}
                   </div>
@@ -181,6 +283,7 @@ export const InteractorsHub: React.FC<InteractorsHubProps> = ({
               </div>
 
               <button
+                type="button"
                 onClick={handleExportCSV}
                 className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold border border-slate-700 transition"
               >
@@ -198,26 +301,32 @@ export const InteractorsHub: React.FC<InteractorsHubProps> = ({
         <div className="lg:col-span-6 space-y-4">
           {/* Radial Network Diagram */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center">
-                <Network className="w-4 h-4 mr-1 text-teal-400" /> Interaction Graph: {selectedGene}
+            <div className="flex items-center justify-between mb-2 gap-2">
+              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center min-w-0">
+                <Network className="w-4 h-4 mr-1 text-teal-400 shrink-0" />
+                <span className="truncate" title={selectedGene}>
+                  Interaction Graph: {shortNodeLabel(selectedGene, 28)}
+                </span>
               </span>
-              <span className="text-[11px] text-slate-500">Node line = co-elution correlation</span>
+              <span className="text-[11px] text-slate-500 shrink-0">
+                {partnerProfilesWithStats.length > 16
+                  ? `Top 16 of ${partnerProfilesWithStats.length} partners`
+                  : 'Edge thickness = Pearson R'}
+              </span>
             </div>
 
             <div className="relative flex items-center justify-center p-2 bg-slate-950/80 rounded-xl border border-slate-800/80">
               <svg viewBox="0 0 420 320" className="w-full h-64 select-none">
-                {/* Center Coordinates */}
                 {(() => {
                   const cx = 210;
                   const cy = 160;
-                  const radius = 110;
-                  const count = partnerProfilesWithStats.length;
+                  const radius = 112;
+                  const count = graphPartners.length;
 
                   return (
                     <g>
                       {/* Interaction Edges */}
-                      {partnerProfilesWithStats.map((p, idx) => {
+                      {graphPartners.map((p, idx) => {
                         const angle = (idx / (count || 1)) * 2 * Math.PI - Math.PI / 2;
                         const nx = cx + radius * Math.cos(angle);
                         const ny = cy + radius * Math.sin(angle);
@@ -240,7 +349,7 @@ export const InteractorsHub: React.FC<InteractorsHubProps> = ({
                       })}
 
                       {/* Surrounding Nodes (Interacting Partners) */}
-                      {partnerProfilesWithStats.map((p, idx) => {
+                      {graphPartners.map((p, idx) => {
                         const angle = (idx / (count || 1)) * 2 * Math.PI - Math.PI / 2;
                         const nx = cx + radius * Math.cos(angle);
                         const ny = cy + radius * Math.sin(angle);
@@ -254,6 +363,11 @@ export const InteractorsHub: React.FC<InteractorsHubProps> = ({
                             onMouseEnter={() => setSelectedPartner(p.gene)}
                             onMouseLeave={() => setSelectedPartner(null)}
                           >
+                            <title>
+                              {p.gene}
+                              {p.profile?.description ? ` — ${p.profile.description}` : ''}
+                              {p.pearsonR !== undefined ? ` (R = ${p.pearsonR.toFixed(2)})` : ''}
+                            </title>
                             <circle
                               cx={nx}
                               cy={ny}
@@ -267,11 +381,11 @@ export const InteractorsHub: React.FC<InteractorsHubProps> = ({
                               x={nx}
                               y={ny + 3.5}
                               textAnchor="middle"
-                              fontSize={9}
+                              fontSize={8.5}
                               fontWeight="bold"
                               fill="#f1f5f9"
                             >
-                              {p.gene.length > 7 ? p.gene.slice(0, 6) + '..' : p.gene}
+                              {shortNodeLabel(p.gene, 8)}
                             </text>
                             {p.pearsonR !== undefined && (
                               <text
@@ -291,10 +405,11 @@ export const InteractorsHub: React.FC<InteractorsHubProps> = ({
 
                       {/* Center Query Node */}
                       <g className="cursor-pointer">
+                        <title>{selectedGene}</title>
                         <circle
                           cx={cx}
                           cy={cy}
-                          r={28}
+                          r={30}
                           fill="#0d9488"
                           stroke="#ffffff"
                           strokeWidth={2.5}
@@ -302,13 +417,13 @@ export const InteractorsHub: React.FC<InteractorsHubProps> = ({
                         />
                         <text
                           x={cx}
-                          y={cy + 4.5}
+                          y={cy + 4}
                           textAnchor="middle"
-                          fontSize={11}
+                          fontSize={10}
                           fontWeight="bold"
                           fill="#ffffff"
                         >
-                          {selectedGene}
+                          {shortNodeLabel(selectedGene, 10)}
                         </text>
                       </g>
                     </g>
@@ -326,49 +441,78 @@ export const InteractorsHub: React.FC<InteractorsHubProps> = ({
 
             <div className="overflow-y-auto max-h-64 divide-y divide-slate-800/80 pr-1 text-xs">
               {partnerProfilesWithStats.length === 0 ? (
-                <div className="text-center py-8 text-slate-500">
-                  No direct PCprophet PPIs recorded for {selectedGene}. Try searching another protein (e.g. dnaN, recF, gyrB).
+                <div className="text-center py-6 text-slate-400 space-y-3 px-2">
+                  <div>
+                    No high-confidence co-eluting PPIs recorded for{' '}
+                    <span className="text-white font-semibold">{selectedGene}</span>.
+                  </div>
+                  {topHubProteins.length > 0 && (
+                    <div className="space-y-1.5">
+                      <div className="text-[11px] text-slate-500">Try a well-connected hub in this dataset:</div>
+                      <div className="flex flex-wrap justify-center gap-1.5">
+                        {topHubProteins.map(h => (
+                          <button
+                            key={h.gene}
+                            type="button"
+                            onClick={() => onSelectGene(h.gene)}
+                            className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-teal-500/20 hover:text-teal-300 text-slate-200 border border-slate-700 text-[11px] font-medium max-w-[180px] truncate transition"
+                            title={`${h.gene} (${h.degree} partners)`}
+                          >
+                            {shortNodeLabel(h.gene, 20)} ({h.degree})
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               ) : (
-                partnerProfilesWithStats.map((p) => (
+                partnerProfilesWithStats.map(p => (
                   <div
                     key={p.gene}
-                    className="p-2.5 rounded-xl hover:bg-slate-800/50 flex items-center justify-between transition"
+                    className="p-2.5 rounded-xl hover:bg-slate-800/50 flex items-center justify-between gap-2 transition"
                   >
-                    <div className="flex items-center space-x-2.5">
+                    <div className="flex items-center space-x-2.5 min-w-0">
                       <span
                         className="w-3 h-3 rounded-full shrink-0"
                         style={{ backgroundColor: p.color }}
                       />
-                      <div>
+                      <div className="min-w-0">
                         <div className="font-bold text-white flex items-center space-x-1.5">
-                          <span>{p.gene}</span>
-                          {p.complexIds.length > 0 && (
-                            <span className="text-[10px] px-1 py-0.2 rounded bg-slate-800 text-teal-400 font-mono">
+                          <span className="truncate max-w-[200px]" title={p.gene}>{p.gene}</span>
+                          {p.complexIds.length > 0 && p.complexIds[0].startsWith('cmplx__') && (
+                            <button
+                              type="button"
+                              onClick={() => onInspectComplex && onInspectComplex(p.complexIds[0])}
+                              className="text-[10px] px-1 py-0.2 rounded bg-slate-800 hover:bg-teal-500/20 text-teal-400 font-mono shrink-0 transition"
+                              title="Inspect complex in PCprophet Hub"
+                            >
                               {p.complexIds[0]}
-                            </span>
+                            </button>
                           )}
                         </div>
-                        <div className="text-[10px] text-slate-400">
-                          {p.profile?.description || 'Detected interactor'}
+                        <div className="text-[10px] text-slate-400 truncate max-w-xs" title={p.profile?.description || ''}>
+                          {p.profile?.description || 'Co-eluting interactor'}
                         </div>
                       </div>
                     </div>
 
-                    <div className="flex items-center space-x-3">
+                    <div className="flex items-center space-x-3 shrink-0">
                       {p.pearsonR !== undefined && (
-                        <span className={`font-mono font-bold px-1.5 py-0.5 rounded text-[11px] ${
-                          p.pearsonR >= 0.8
-                            ? 'bg-emerald-500/20 text-emerald-400'
-                            : p.pearsonR >= 0.6
-                            ? 'bg-teal-500/20 text-teal-400'
-                            : 'bg-slate-800 text-slate-400'
-                        }`}>
+                        <span
+                          className={`font-mono font-bold px-1.5 py-0.5 rounded text-[11px] ${
+                            p.pearsonR >= 0.8
+                              ? 'bg-emerald-500/20 text-emerald-400'
+                              : p.pearsonR >= 0.6
+                              ? 'bg-teal-500/20 text-teal-400'
+                              : 'bg-slate-800 text-slate-400'
+                          }`}
+                        >
                           R = {p.pearsonR.toFixed(2)}
                         </span>
                       )}
 
                       <button
+                        type="button"
                         onClick={() => onSelectGene(p.gene)}
                         className="px-2 py-1 bg-slate-800 hover:bg-teal-500 hover:text-slate-950 text-slate-200 rounded font-medium transition"
                       >
@@ -390,17 +534,17 @@ export const InteractorsHub: React.FC<InteractorsHubProps> = ({
             normMode={normMode}
             selectedFraction={primaryProfile?.apexFraction || null}
             onSelectFraction={() => {}}
-            title={`Co-Migration Chromatogram: ${selectedGene} & Interactors`}
+            title={`Co-Migration Chromatogram: ${selectedGene}`}
             subtitle={`Validating physical complex interaction via SEC profile overlap`}
           />
 
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl text-xs text-slate-300">
             <h4 className="font-bold text-white mb-2 flex items-center space-x-1.5">
               <Layers className="w-4 h-4 text-teal-400" />
-              <span>How PCprophet Interactors Work</span>
+              <span>How Co-Elution &amp; PCprophet Interactors Work</span>
             </h4>
             <p className="leading-relaxed text-slate-400">
-              PCprophet assesses whether two proteins physically associate by evaluating their SEC co-fractionation profiles across sequential fractions. High Pearson correlation (<span className="text-emerald-400 font-semibold">R &gt; 0.8</span>) coupled with matching elution apex fractions indicates stable complex membership. Peak shifts between timepoints (e.g. 60min vs 120min) reflect dynamic assembly, remodeling, or disassembly.
+              Physical protein complexes co-migrate across Size-Exclusion Chromatography fractions. High Pearson correlation (<span className="text-emerald-400 font-semibold">R &gt; 0.8</span>) coupled with matching elution apex fractions and peak shape similarity indicates stable complex assembly. For uploaded datasets without an external PCprophet report, interactions are automatically inferred de novo and can be tuned in the PCprophet Complexes tab.
             </p>
           </div>
         </div>
